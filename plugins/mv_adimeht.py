@@ -198,13 +198,12 @@ class PluginMvAdimeht(IPlugin):
             if len(operands) == 0 or len(operands) > 1:
                 return None, None
             _dst.append(operands[0])
-        elif instruction.id in [capstone.x86.X86_INS_MOV, capstone.x86.X86_INS_ADD, capstone.x86.X86_INS_SUB,
-                                capstone.x86.X86_INS_AND, capstone.x86.X86_INS_OR]:
+        elif instruction.id in [capstone.x86.X86_INS_MOV, capstone.x86.X86_INS_AND, capstone.x86.X86_INS_OR]:
             if len(operands) == 0 or len(operands) > 2:
                 return None, None
             _dst.append(operands[0])
             _src.append(operands[1])
-        elif instruction.id == capstone.x86.X86_INS_XOR:
+        elif instruction.id in [capstone.x86.X86_INS_XOR, capstone.x86.X86_INS_ADD, capstone.x86.X86_INS_SUB]:
             if len(operands) != 2:
                 return None, None
             if operands[0]['name'] == operands[1]['name']:
