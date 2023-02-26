@@ -8,7 +8,24 @@ class PluginMvAdimeht(IPlugin):
     md = None
     api = None
 
-    tainted = []
+    # list of taint [
+    #   {
+    #     labels: ['your input', ...],
+    #     name: 'eax' | '[0x401000]',
+    #   }, ...
+    # ]
+    TAINTED = []
+
+    # taints' type can be list of taint
+    def get_aggregated_taints_names_by_labels(self, taints):
+        _agg = {}
+        for _taint in taints:
+            _labels = _taint['labels']
+            for _label in _labels:
+                if _label not in _agg:
+                    _agg[_label] = []
+                _agg[_label].append(_taint['name'])
+        return str(_agg)
 
     def get_register_value_from_trace(self, trace, reg_name):
         _reg_index = {
@@ -118,42 +135,103 @@ class PluginMvAdimeht(IPlugin):
 
         return _operands
 
-    def is_tainted(self, operand):
-        if operand['name'] in self.tainted:
-            return True
-        # if operand['type'] != 'mem':
-        #     return False
-        # for _form in operand['formula']:
-        #     if _form in self.tainted:
-        #         return True
-        return False
-
-    def are_tainted(self, operands):
+    def are_operands_have_operand(self, operands, operand_to_find):
         for _operand in operands:
-            _is_tainted = self.is_tainted(_operand)
-            if _is_tainted is True:
+            if _operand['name'] == operand_to_find:
                 return True
         return False
 
-    def _run_taint(self, trace, instruction, dst, src):
-        _are_tainted = self.are_tainted(src)
-        if _are_tainted:
-            for _dst in dst:
-                if _dst['name'] not in self.tainted:
-                    # self.api.print('[+] %s' % _dst['name'])
-                    self.tainted.append(_dst['name'])
+    # operand's type can be operand or taint
+    # returns index of operand in tainted, -1 when it's not exists
+    def get_taint_index(self, operand):
+        for _i_tainted in range(len(self.TAINTED)):
+            _tainted = self.TAINTED[_i_tainted]
+            if operand['name'] == _tainted['name']:
+                return _i_tainted
+        return -1
+
+    # operand's type can be operand or taint
+    # returns list of label of the tainted operand
+    def get_taint_labels(self, operand):
+        _i_tainted = self.get_taint_index(operand)
+        if _i_tainted < 0:
+            return None
+        return self.TAINTED[_i_tainted]['labels']
+
+    # operands' type can be operand or taint
+    # returns list of taint
+    def get_tainted_operands_from_input_operands(self, operands):
+        _result = []
+        for _operand in operands:
+            _tainted_labels = self.get_taint_labels(_operand)
+            if _tainted_labels is not None:
+                _result.append({
+                    'labels': _tainted_labels,
+                    'name': _operand['name'],
+                })
+        return _result
+
+    # operand's type can be operand or taint
+    # returns nothing
+    def add_operand_to_tainted(self, operand, labels):
+        _labels = []
+        for _label in labels:
+            if _label not in _labels:
+                _labels.append(_label)
+        _i_tainted = self.get_taint_index(operand)
+        # when the input operand has not tainted yet
+        if _i_tainted < 0:
+            self.TAINTED.append({
+                'labels': _labels,
+                'name': operand['name'],
+            })
+        # when the input operand has tainted
         else:
-            for _dst in dst:
-                if _dst['name'] in self.tainted:
-                    # self.api.print('[-] %s' % _dst['name'])
-                    self.tainted.remove(_dst['name'])
+            del self.TAINTED[_i_tainted]
+            self.TAINTED.append({
+                'labels': _labels,
+                'name': operand['name'],
+            })
+
+    # operand's type can be operand or taint
+    # returns nothing
+    def remove_operand_from_tainted(self, operand):
+        _i_tainted = self.get_taint_index(operand)
+        # when the input operand has not tainted yet
+        if _i_tainted < 0:
+            return
+        del self.TAINTED[_i_tainted]
+
+    # taints' type can be taint
+    # returns list of labels
+    def get_merged_labels_from_taints(self, taints):
+        _labels = []
+        for _taint in taints:
+            for _label in _taint['labels']:
+                if _label in _labels:
+                    continue
+                _labels.append(_label)
+        return _labels
+
+    # dsts' type can be operand or taint
+    # srcs' type can be operand or taint
+    # returns list of taint
+    def _run_taint(self, trace, instruction, dsts, srcs):
+        _taints = self.get_tainted_operands_from_input_operands(srcs)
+        # when it's tainted
+        if len(_taints) > 0:
+            _labels = self.get_merged_labels_from_taints(_taints)
+            for _dst in dsts:
+                self.add_operand_to_tainted(_dst, _labels)
+        # when it's not tainted
+        else:
+            for _dst in dsts:
+                self.remove_operand_from_tainted(_dst)
+        return _taints
 
     def get_dst_src(self, trace, instruction, operands):
         _dst = []
         _src = []
-        # self.api.print(trace)
-        # self.api.print(operands)
-        # self.api.print(str(self.tainted))
         if len(instruction.groups) > 0:
             for _g in instruction.groups:
                 if _g == capstone.x86.X86_GRP_CALL:
@@ -234,44 +312,49 @@ class PluginMvAdimeht(IPlugin):
                 return None, None
             _dst.append(operands[0])
             _src.append(operands[1])
-        elif instruction.id in [capstone.x86.X86_INS_XOR, capstone.x86.X86_INS_ADD, capstone.x86.X86_INS_SUB]:
+        elif instruction.id in [capstone.x86.X86_INS_XOR]:
             if len(operands) != 2:
                 return None, None
             if operands[0]['name'] == operands[1]['name']:
-                if self.is_tainted(operands[0]):
-                    self.tainted.remove(operands[0]['name'])
+                self.remove_operand_from_tainted(operands[0])
                 return [], []
-            _was_tainted_1 = self.is_tainted(operands[1])
-            if _was_tainted_1:
-                if operands[0]['name'] not in self.tainted:
-                    self.tainted.append(operands[0]['name'])
+            _taint_labels_1 = self.get_taint_labels(operands[1])
+            if _taint_labels_1 is not None:
+                self.add_operand_to_tainted(operands[0], _taint_labels_1)
+        elif instruction.id in [capstone.x86.X86_INS_ADD, capstone.x86.X86_INS_SUB]:
+            if len(operands) != 2:
+                return None, None
+            _taint_labels_1 = self.get_taint_labels(operands[1])
+            if _taint_labels_1 is not None:
+                self.add_operand_to_tainted(operands[0], _taint_labels_1)
         elif instruction.id == capstone.x86.X86_INS_XCHG:
             if len(operands) != 2:
                 return None, None
-            _was_tainted_0 = self.is_tainted(operands[0])
-            _was_tainted_1 = self.is_tainted(operands[1])
-            if _was_tainted_0:
-                self.tainted.remove(operands[0]['name'])
-            if _was_tainted_1:
-                self.tainted.remove(operands[1]['name'])
-            if _was_tainted_0:
-                self.tainted.append(operands[1]['name'])
-            if _was_tainted_1:
-                self.tainted.append(operands[0]['name'])
+            _taint_labels_0 = self.get_taint_labels(operands[0])
+            _taint_labels_1 = self.get_taint_labels(operands[1])
+            if _taint_labels_0 is not None:
+                self.remove_operand_from_tainted(operands[0])
+            if _taint_labels_1 is not None:
+                self.remove_operand_from_tainted(operands[1])
+            if _taint_labels_0 is not None:
+                self.add_operand_to_tainted(operands[1], _taint_labels_0)
+            if _taint_labels_1 is not None:
+                self.add_operand_to_tainted(operands[0], _taint_labels_1)
             return [], []
         elif instruction.id == capstone.x86.X86_INS_CMPXCHG:
             if len(operands) != 2:
                 return None, None
-            _was_tainted_1 = self.is_tainted(operands[1])
-            if _was_tainted_1 is False:
+            _taint_labels_1 = self.get_taint_labels(operands[1])
+            if _taint_labels_1 is not None:
                 return [], []
             for _mem in trace['mem']:
                 if _mem['access'] == 'WRITE' and _mem['addr'] == operands[0]['value']:
-                    if self.is_tainted(operands[0]):
-                        self.api.print(trace)
-                        self.api.print(operands)
-                        self.api.print(str(self.tainted))
-                        self.tainted.remove(operands[0]['name'])
+                    _taint_labels_0 = self.get_taint_labels(operands[0])
+                    if _taint_labels_0 is not None:
+                        # self.api.print(trace)
+                        # self.api.print(operands)
+                        # self.api.print(str(self.TAINTED))
+                        self.remove_operand_from_tainted(operands[0])
                         break
             return [], []
         elif instruction.id in [capstone.x86.X86_INS_INC, capstone.x86.X86_INS_DEC, capstone.x86.X86_INS_NOT,
@@ -287,21 +370,51 @@ class PluginMvAdimeht(IPlugin):
         _instructions = self.md.disasm(bytes.fromhex(trace['opcodes']), trace['ip'])
         for _inst in _instructions:
             _operands = self.get_operands(trace, _inst)
-            _dst, _src = self.get_dst_src(trace, _inst, _operands)
-            if _src is None:
+            _dsts, _srcs = self.get_dst_src(trace, _inst, _operands)
+            if _srcs is None:
                 self.api.print('%d : 0x%x : %s : %s' % (trace['id'], trace['ip'], trace['disasm'], str(_operands)))
-                self.api.print(' - src: %s' % _src)
-                self.api.print(' - dst: %s' % _dst)
+                self.api.print(' - src: %s' % _srcs)
+                self.api.print(' - dst: %s' % _dsts)
                 self.api.print(trace)
                 self.api.print('[+] Operands : ' + str(_operands))
-                self.api.print('[+] Tainted : ' + str(self.tainted))
+                self.api.print('[+] Tainted : ' + str(self.TAINTED))
                 return None
-            self._run_taint(trace, _inst, _dst, _src)
-            trace['comment'] = str(self.tainted)
+            _taints = self._run_taint(trace, _inst, _dsts, _srcs)
+            if len(_taints) > 0:
+                _names_dsts = ['(%s : %s)' % (self.get_taint_labels(_dst), _dst['name']) for _dst in _dsts]
+                _names_srcs = ['(%s : %s)' % (self.get_taint_labels(_src), _src['name']) for _src in _srcs]
+                self.api.print('%d : 0x%x : %s : dst: %s : src: %s' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
+
+            _comment = ''
+            _ebp = self.get_register_value_from_trace(trace, 'ebp')
+            if _ebp == 0x3d7628:
+                _comment += 'VM: '
+            if self.are_operands_have_operand(_operands, 'ebp'):
+                _comment += 'EBP: '
+            if len(_taints) > 0:
+                _comment += 'Taint: '
+                _comment += str(self.get_merged_labels_from_taints(_taints))
+            # if self.are_operands_have_operand(_operands, '[0x3d764e]'):
+            #     _comment += 'VAX: '
+            # if self.are_operands_have_operand(_operands, '[0x3d76dd]'):
+            #     _comment += 'VCX: '
+            # if self.are_operands_have_operand(_operands, '[0x3d7686]'):
+            #     _comment += 'VDX: '
+            # if self.are_operands_have_operand(_operands, '[0x3d7661]'):
+            #     _comment += 'VBX: '
+            # if self.are_operands_have_operand(_operands, '[0x3d76bd]'):
+            #     _comment += 'VEBP: '
+            # if self.are_operands_have_operand(_operands, '[0x3d7692]'):
+            #     _comment += 'VSI: '
+            # if self.are_operands_have_operand(_operands, '[0x3d76c1]'):
+            #     _comment += 'VDI: '
+            _comment += self.get_aggregated_taints_names_by_labels(self.TAINTED)
+
+            trace['comment'] = _comment
         return trace
 
     def execute(self, api: Api):
-        self.tainted = []
+        self.TAINTED = []
         self.api = api
         self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.md.detail = True
@@ -309,13 +422,14 @@ class PluginMvAdimeht(IPlugin):
             {'label': 'Trace boundary begin', 'data': '0x0'},
             {'label': 'Trace boundary end', 'data': '0x70000000'},
             {'label': 'Target index(#)', 'data': 0},
-            {'label': 'Target operand', 'data': 'eax'},
+            {'label': 'Target operand (reg or preset)', 'data': 'preset'},
+            {'label': 'Target desc (when it\'s reg)', 'data': 'preset'},
             {'label': 'TTL (no limit, -1)', 'data': -1},
         ]
         _options = self.api.get_values_from_user("Filter by memory address", _input_dlg_data)
         if not _options:
             return
-        _str_trace_boundary_begin, _str_trace_boundary_end, _target_index, _target_operand, _ttl = _options
+        _str_trace_boundary_begin, _str_trace_boundary_end, _target_index, _target_operand, _target_description, _ttl = _options
         _trace_boundary_begin = int(_str_trace_boundary_begin, 16)
         _trace_boundary_end = int(_str_trace_boundary_end, 16)
 
@@ -347,7 +461,50 @@ class PluginMvAdimeht(IPlugin):
                 if _eip < _trace_boundary_begin or _eip >= _trace_boundary_end:
                     continue
                 if _index == _target_index:
-                    self.tainted.append(_target_operand)
+                    # self.TAINTED.append(_target_operand)
+                    if _target_operand == 'preset':
+                        self.TAINTED.append({
+                            'labels': ['eax'],
+                            'name': 'eax',
+                        })
+                        self.TAINTED.append({
+                            'labels': ['ebx'],
+                            'name': 'ebx',
+                        })
+                        self.TAINTED.append({
+                            'labels': ['ecx'],
+                            'name': 'ecx',
+                        })
+                        self.TAINTED.append({
+                            'labels': ['edx'],
+                            'name': 'edx',
+                        })
+                        self.TAINTED.append({
+                            'labels': ['esi'],
+                            'name': 'esi',
+                        })
+                        self.TAINTED.append({
+                            'labels': ['edi'],
+                            'name': 'edi',
+                        })
+
+                        self.TAINTED.append({
+                            'labels': ['arg_A'],
+                            'name': '[0xcff9c8]',
+                        })
+                        self.TAINTED.append({
+                            'labels': ['arg_B'],
+                            'name': '[0xcff9cc]',
+                        })
+                        self.TAINTED.append({
+                            'labels': ['arg_C'],
+                            'name': '[0xcff9d0]',
+                        })
+                    else:
+                        self.TAINTED.append({
+                            'labels': [_target_description],
+                            'name': _target_operand,
+                        })
 
                 _new_trace = self.run_taint(_trace)
                 if _new_trace is None:
@@ -359,6 +516,6 @@ class PluginMvAdimeht(IPlugin):
             print(e)
 
         if len(_traces_to_show) > 0:
-            print(f"Length of filtered trace: {len(_traces_to_show)}")
+            print('Length of filtered trace: %d' % len(_traces_to_show))
             self.api.set_filtered_trace(_traces_to_show)
             self.api.show_filtered_trace()

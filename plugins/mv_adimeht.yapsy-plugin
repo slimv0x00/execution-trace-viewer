@@ -1,9 +1,9 @@
 [Core]
-Name = MV Adimeht
+Name = MV_Adimeht
 Module = mv_adimeht
 
 [Documentation]
-Author = slimv0x00
+Author = slimV
 Version = 0.1
-Website = https://github.com/slimv0x00/execution-trace-viewer
-Description = testbed
+Website = https://github.com/teemu-l/execution-trace-viewer
+Description = MV_Adimeht
