@@ -508,17 +508,19 @@ class PluginMvAdimeht(IPlugin):
 
             # run taint
             _taints_dst, _taints_src = self._run_taint(trace, _inst, _dsts, _srcs, self.TAINTED)
-            # print tainted operation
             if len(_taints_dst) > 0 or len(_taints_src) > 0:
+
+                # print tainted operation
                 _names_dsts = ['(%s%s : %s)' % ('' if self.get_vr_name(_dst) is None else '%s : ' % self.get_vr_name(_dst), self.get_taint_labels(_dst, _taints_dst), _dst['name']) for _dst in _dsts]
                 _names_srcs = ['(%s%s : %s)' % ('' if self.get_vr_name(_src) is None else '%s : ' % self.get_vr_name(_src), self.get_taint_labels(_src, _taints_src), _src['name']) for _src in _srcs]
-                self.api.print('%d : 0x%x : %s : dst: %s : src: %s' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
+                # self.api.print('%d : 0x%x : %s : dst: %s : src: %s' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
 
-            if len(_taints_dst) > 0 or len(_taints_src) > 0:
                 _taints = _taints_dst + _taints_src
-                _comment += 'Taint: '
-                _comment += str(self.get_merged_labels_from_taints(_taints))
-            _comment += self.get_aggregated_taints_names_by_labels(self.TAINTED)
+                _comment += 'dst: %s ' % str(_names_dsts)
+                _comment += 'src: %s ' % str(_names_srcs)
+                # _comment += 'Taint: '
+                # _comment += str(self.get_merged_labels_from_taints(_taints))
+            # _comment += self.get_aggregated_taints_names_by_labels(self.TAINTED)
 
             trace['comment'] = _comment
         return trace
