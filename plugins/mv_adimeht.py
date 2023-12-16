@@ -37,6 +37,30 @@ class PluginMvAdimeht(IPlugin):
         }
         return trace['regs'][_reg_index[reg_name]]
 
+    def get_upper_register(self, reg_name):
+        _upper_register = None
+        if reg_name in ['eax', 'ax', 'ah', 'al']:
+            _upper_register = 'eax'
+        elif reg_name in ['ebx', 'bx', 'bh', 'bl']:
+            _upper_register = 'ebx'
+        elif reg_name in ['ecx', 'cx', 'ch', 'cl']:
+            _upper_register = 'ecx'
+        elif reg_name in ['edx', 'dx', 'dh', 'dl']:
+            _upper_register = 'edx'
+        elif reg_name in ['esp', 'sp']:
+            _upper_register = 'esp'
+        elif reg_name in ['ebp', 'bp']:
+            _upper_register = 'ebp'
+        elif reg_name in ['esi', 'si']:
+            _upper_register = 'esi'
+        elif reg_name in ['edi', 'di']:
+            _upper_register = 'edi'
+        elif reg_name in ['eip']:
+            _upper_register = 'eip'
+        elif reg_name in ['eflags']:
+            _upper_register = 'eflags'
+        return _upper_register
+
     # returns list of operand [{
     #   type : 'reg' | 'imm', | 'mem' | 'fp' | 'invalid' | 'unknown',
     #   name : 'eax' | '0x100' | [0x401000] | ? | 'invalid' | 'unknown',
@@ -56,7 +80,7 @@ class PluginMvAdimeht(IPlugin):
             # }
             # _operand = {}
             if _op.type == capstone.x86.X86_OP_REG:
-                _reg_name = instruction.reg_name(_op.value.reg)
+                _reg_name = self.get_upper_register(instruction.reg_name(_op.value.reg))
                 _operand = {
                     'type': 'reg',
                     'name': _reg_name,
@@ -83,14 +107,14 @@ class PluginMvAdimeht(IPlugin):
                 _base_value = 0
                 _index_value = 0
                 if _segment != 0:
-                    _mem_formula.append(instruction.reg_name(_segment))
+                    _mem_formula.append(self.get_upper_register(instruction.reg_name(_segment)))
                     _mem_formula.append(':')
                 if _base != 0:
-                    _base_reg_name = instruction.reg_name(_base)
+                    _base_reg_name = self.get_upper_register(instruction.reg_name(_base))
                     _base_value = self.get_register_value_from_trace(trace, _base_reg_name)
                     _mem_formula.append(_base_reg_name)
                 if _index != 0:
-                    _index_reg_name = instruction.reg_name(_index)
+                    _index_reg_name = self.get_upper_register(instruction.reg_name(_index))
                     _index_value = self.get_register_value_from_trace(trace, _index_reg_name)
                     _mem_formula.append("+")
                     _mem_formula.append("%s" % _index_reg_name)
@@ -254,21 +278,38 @@ class PluginMvAdimeht(IPlugin):
     # taints' type can be taint
     # returns previous tainted status of dsts, srcs as taint list
     def _run_taint(self, trace, instruction, dsts, srcs, taints, deep_search=False):
-        _taints_dst = self.get_tainted_operands_from_input_operands(dsts, taints, deep_search=deep_search)
+        _taints_dst = self.get_tainted_operands_from_input_operands(dsts, taints, deep_search=False)
         _taints_src = self.get_tainted_operands_from_input_operands(srcs, taints, deep_search=deep_search)
         if instruction.id in [capstone.x86.X86_INS_ADD, capstone.x86.X86_INS_SUB, capstone.x86.X86_INS_XOR]:
             if instruction.id in [capstone.x86.X86_INS_XOR]:
                 if dsts[0]['name'] == srcs[0]['name']:
                     self.remove_operand_from_tainted(dsts[0], taints)
+                    return [], []
             # when it's tainted
             if len(_taints_src) > 0:
+                _labels_duplicates = []
                 _taints = _taints_src
                 # when dst is already tainted
                 if len(_taints_dst) > 0:
                     _taints += _taints_dst
+                    _labels_dst = self.get_merged_labels_from_taints(_taints_dst)
+                    _labels_src = self.get_merged_labels_from_taints(_taints_src)
+                    _labels_duplicates = list(set(_labels_dst) & set(_labels_src))
                 _labels = self.get_merged_labels_from_taints(_taints)
-                for _dst in dsts:
-                    self.add_operand_to_tainted(_dst, _labels, taints)
+                if instruction.id in [capstone.x86.X86_INS_XOR]:
+                    # when taints have duplicates, remove it from labels
+                    if len(_labels_duplicates) > 0:
+                        for _label_dup in _labels_duplicates:
+                            _labels.remove(_label_dup)
+                # when the _labels is empty, you should remove the _dst from taints
+                if len(_labels) > 0:
+                    for _dst in dsts:
+                        # print('[+] %s : %s : %s ( %s ) <- %s' % (trace['id'], trace['disasm'], _dst, _labels, srcs))
+                        self.add_operand_to_tainted(_dst, _labels, taints)
+                else:
+                    for _dst in dsts:
+                        # print('[-] %s : %s : %s ( %s )' % (trace['id'], trace['disasm'], _dst, _labels))
+                        self.remove_operand_from_tainted(_dst, taints)
         elif instruction.id in [capstone.x86.X86_INS_XCHG, capstone.x86.X86_INS_CMPXCHG]:
             if instruction.id in [capstone.x86.X86_INS_CMPXCHG]:
                 _is_changed = False
@@ -325,6 +366,13 @@ class PluginMvAdimeht(IPlugin):
                     _src.append(operands[0])
                     return _dst, _src
                 elif _g == capstone.x86.X86_GRP_RET or _g == capstone.x86.X86_GRP_IRET:
+                    _operand_value = self.get_register_value_from_trace(trace, 'esp')
+                    _src.append({
+                        'type': 'mem',
+                        'name': '[0x%x]' % _operand_value,
+                        'value': _operand_value,
+                        'formula': '[ esp ]'.split(' '),
+                    })
                     return _dst, _src
 
         if instruction.id == capstone.x86.X86_INS_PUSH:
@@ -395,6 +443,7 @@ class PluginMvAdimeht(IPlugin):
                 return None, None
             _dst.append(operands[0])
             _src.append(operands[1])
+            # print('%s : %s : ( dst: %s )( src: %s )' % (trace['id'], trace['disasm'], _dst, _src))
         elif instruction.id == capstone.x86.X86_INS_XCHG:
             if len(operands) != 2:
                 return None, None
@@ -407,8 +456,10 @@ class PluginMvAdimeht(IPlugin):
             _src.append(operands[1])
         elif instruction.id in [capstone.x86.X86_INS_INC, capstone.x86.X86_INS_DEC, capstone.x86.X86_INS_NOT,
                                 capstone.x86.X86_INS_NEG, capstone.x86.X86_INS_TEST, capstone.x86.X86_INS_CMP,
-                                capstone.x86.X86_INS_SHR, capstone.x86.X86_INS_SHL, capstone.x86.X86_INS_STD]:
-            return [], []
+                                capstone.x86.X86_INS_SHR, capstone.x86.X86_INS_SHL]:
+            _dst.append(operands[0])
+        elif instruction.id in [capstone.x86.X86_INS_STD]:
+            pass
         else:
             self.api.print('[E] Instruction ID : %s (https://github.com/capstone-engine/capstone/blob/master/include/capstone/x86.h)' % instruction.id)
             return None, None
@@ -420,9 +471,20 @@ class PluginMvAdimeht(IPlugin):
     #     name: 'eax' | '[0x401000]',
     #   }, ...
     # ]
-    VBP_RELATED = []
+    VBR_RELATED = []
     # list of string, contains VR names
     VR_NAMES = []
+    # VR labels {
+    #   vr_name (like 'VR02'): vr_label (like 'VBP'),
+    # }
+    VR_LABELS = {
+        'VR00': 'VRP',  # [0x3d764a], stores VR info?
+        'VR01': 'VIP',  # [0x3d76a3]
+        'VR15': 'VOP2',  # [0x3d7696]
+        'VR19': 'VSP',  # [0x3d768e]
+        'VR21': 'VOP1',  # [0x3d76d5]
+        'VR23': 'VBP',  # [0x3d76bd]
+    }
 
     # operands' type can be operand or taint
     # returns VR name when it's VR, or returns None
@@ -431,6 +493,13 @@ class PluginMvAdimeht(IPlugin):
             return None
         return 'VR%02d' % self.VR_NAMES.index(operand['name'])
 
+    # vr_name is name of VR like 'VR02'
+    # returns VR label when it's VR, or returns None
+    def get_vr_label(self, vr_name):
+        if vr_name in self.VR_LABELS:
+            return self.VR_LABELS[vr_name]
+        return vr_name
+
     # operands' type can be operand or taint
     # returns VR name
     def add_vr_name(self, operand):
@@ -438,6 +507,18 @@ class PluginMvAdimeht(IPlugin):
             self.VR_NAMES.append(operand['name'])
             self.api.print('[+] New VR : %s (%s)' % ('VR%02d' % self.VR_NAMES.index(operand['name']), operand['name']))
         return 'VR%02d' % self.VR_NAMES.index(operand['name'])
+
+    def get_tainted_operands_string(self, operands, taints):
+        _result = ''
+        for _op in operands:
+            _result += '('
+            _vr_name = self.get_vr_name(_op)
+            if _vr_name is not None:
+                _vr_label = self.get_vr_label(_vr_name)
+                _result += '%s : ' % _vr_label
+            _result += '%s : ' % self.get_taint_labels(_op, taints)
+            _result += '%s)' % _op['name']
+        return _result
 
     def run_taint(self, trace):
         _instructions = self.md.disasm(bytes.fromhex(trace['opcodes']), trace['ip'])
@@ -455,72 +536,68 @@ class PluginMvAdimeht(IPlugin):
 
             _comment = ''
 
-            # taint VBP related operands
+            # taint VBR related operands
             _ebp = self.get_register_value_from_trace(trace, 'ebp')
             if _ebp == 0x3d7628:
-                # should add vbp into tainted
+                # should add vbr into tainted
                 _comment += 'VM: '
                 if self.are_operands_have_operand(_srcs, 'ebp'):
-                    _comment += 'VBP: '
+                    _comment += 'VBR: '
                     self.add_operand_to_tainted({
-                        'labels': ['vbp'],
+                        'labels': ['vbr'],
                         'name': 'ebp',
-                    }, ['vbp'], self.VBP_RELATED)
+                    }, ['vbr'], self.VBR_RELATED)
 
-                # everything in vbp related is labeled as 'vbp', vr kinds will be added to the tainted
-                _vbp_tainted_dst, _vbp_tainted_src = self.get_tainted_status(trace, _inst, _dsts, _srcs, self.VBP_RELATED, deep_search=True)
-                if len(_vbp_tainted_dst) > 0 or len(_vbp_tainted_src) > 0:
-                    _vbp_taints = _vbp_tainted_dst + _vbp_tainted_src
-                    for _vbp_taint in _vbp_taints:
-                        if _vbp_taint['name'].find('[0x') == 0:
-                            # _vr_addr = int(_vbp_taint['name'][3:-1], 16)
-                            # if _vr_addr >= 0x400000: ################# would be work on the sample, should be changed #################
-                            #     continue
+                # everything in vbr related is labeled as 'vbr', vr kinds will be added to the tainted
+                _vbr_tainted_dst, _vbr_tainted_src = self.get_tainted_status(trace, _inst, _dsts, _srcs, self.VBR_RELATED, deep_search=True)
+                if len(_vbr_tainted_dst) > 0 or len(_vbr_tainted_src) > 0:
+                    _vbr_taints = _vbr_tainted_dst + _vbr_tainted_src
+                    for _vbr_taint in _vbr_taints:
+                        if _vbr_taint['name'].find('[0x') == 0:
+
+                            _vr_addr = int(_vbr_taint['name'][3:-1], 16)
+
+                            # when the address is in stack area
+                            if _vr_addr >= 0xc00000: ################# would be work on the sample, should be changed #################
+                                continue
 
                             # accessing to VR found
-                            _vr_name = self.add_vr_name(_vbp_taint)
+                            _vr_name = self.add_vr_name(_vbr_taint)
 
                             # when VR is already tainted
-                            if self.get_taint_index(_vbp_taint, self.TAINTED) > 0:
+                            if self.get_taint_index(_vbr_taint, self.TAINTED) > 0:
                                 continue
 
                             # this should be changed, see index 13059 and 13308
                             # labels shouldn't be changed when the operand is already tainted
                             self.add_operand_to_tainted({
                                 'labels': [_vr_name],
-                                'name': _vbp_taint['name'],
+                                'name': _vbr_taint['name'],
                             }, [_vr_name], self.TAINTED)
 
-                    # print tainted operation
-                    # _names_dsts = ['(%s%s : %s)' % ('' if self.get_vr_name(_dst) is None else '%s : ' % self.get_vr_name(_dst), self.get_taint_labels(_dst, _vbp_tainted_dst), _dst['name']) for _dst in _dsts]
-                    # _names_srcs = ['(%s%s : %s)' % ('' if self.get_vr_name(_src) is None else '%s : ' % self.get_vr_name(_src), self.get_taint_labels(_src, _vbp_tainted_src), _src['name']) for _src in _srcs]
-                    # self.api.print('%d : 0x%x : %s : dst: %s : src: %s' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
-
-                _vbp_tainted_dst, _vbp_tainted_src = self._run_taint(trace, _inst, _dsts, _srcs, self.VBP_RELATED)
-                # print tainted operation
-                # if len(_vbp_tainted_dst) > 0 or len(_vbp_tainted_src) > 0:
-                #     _names_dsts = ['(%s : %s)' % (self.get_taint_labels(_dst, _vbp_tainted_dst), _dst['name']) for _dst in _dsts]
-                #     _names_srcs = ['(%s : %s)' % (self.get_taint_labels(_src, _vbp_tainted_src), _src['name']) for _src in _srcs]
-                #     self.api.print('%d : 0x%x : %s : dst: %s : src: %s' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
+                _vbr_tainted_dst, _vbr_tainted_src = self._run_taint(trace, _inst, _dsts, _srcs, self.VBR_RELATED)
+                # if len(_vbr_tainted_dst) > 0 or len(_vbr_tainted_src) > 0:
+                #
+                #     # print tainted operation
+                #     _names_dsts = self.get_tainted_operands_string(_dsts, _vbr_tainted_dst)
+                #     _names_srcs = self.get_tainted_operands_string(_srcs, _vbr_tainted_src)
+                #     self.api.print('%d : 0x%x : %s ( dst: %s )( src: %s )' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
             else:
-                # remove vbp from tainted
-                self.VBP_RELATED = []
+                # remove vbr from tainted
+                self.VBR_RELATED = []
 
             # run taint
-            _taints_dst, _taints_src = self._run_taint(trace, _inst, _dsts, _srcs, self.TAINTED)
+            # _taints_dst, _taints_src = self._run_taint(trace, _inst, _dsts, _srcs, self.TAINTED)
+            _taints_dst, _taints_src = self._run_taint(trace, _inst, _dsts, _srcs, self.TAINTED, deep_search=True)
             if len(_taints_dst) > 0 or len(_taints_src) > 0:
 
                 # print tainted operation
-                _names_dsts = ['(%s%s : %s)' % ('' if self.get_vr_name(_dst) is None else '%s : ' % self.get_vr_name(_dst), self.get_taint_labels(_dst, _taints_dst), _dst['name']) for _dst in _dsts]
-                _names_srcs = ['(%s%s : %s)' % ('' if self.get_vr_name(_src) is None else '%s : ' % self.get_vr_name(_src), self.get_taint_labels(_src, _taints_src), _src['name']) for _src in _srcs]
-                # self.api.print('%d : 0x%x : %s : dst: %s : src: %s' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
-
-                _taints = _taints_dst + _taints_src
-                _comment += 'dst: %s ' % str(_names_dsts)
-                _comment += 'src: %s ' % str(_names_srcs)
-                # _comment += 'Taint: '
-                # _comment += str(self.get_merged_labels_from_taints(_taints))
-            # _comment += self.get_aggregated_taints_names_by_labels(self.TAINTED)
+                _names_dsts = self.get_tainted_operands_string(_dsts, _taints_dst)
+                _names_srcs = self.get_tainted_operands_string(_srcs, _taints_src)
+                _str_taints = 'dst: %s src: %s ' % (str(_names_dsts), str(_names_srcs))
+                _comment += _str_taints
+                # if _str_taints.find('(VR') >= 0:
+                #     self.api.print('%d : 0x%x : %s ( dst: %s )( src: %s )' % (trace['id'], trace['ip'], trace['disasm'], str(_names_dsts), str(_names_srcs)))
 
             trace['comment'] = _comment
         return trace
@@ -549,6 +626,10 @@ class PluginMvAdimeht(IPlugin):
         self.TAINTED.append({
             'labels': ['edi'],
             'name': 'edi',
+        })
+        self.TAINTED.append({
+            'labels': ['ebp'],
+            'name': 'ebp',
         })
 
         self.TAINTED.append({
