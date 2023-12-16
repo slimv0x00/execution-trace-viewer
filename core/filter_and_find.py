@@ -157,6 +157,8 @@ def filter_trace(trace: list, regs: dict, filter_text: str):
                 data = list(filter(lambda x: x["regs"][reg_index] == value, data))
             else:
                 raise ValueError(f"Unknown register: {reg}")
+        elif f_parts[0] == "address":
+            data = list(filter(lambda x: re.search(value, "0x%x" % x['ip']) is not None, data))
         elif f_parts[0] == "regex":
             data = list(filter(lambda x: re.search(value, str(x)) is not None, data))
         elif f_parts[0] == "iregex":
