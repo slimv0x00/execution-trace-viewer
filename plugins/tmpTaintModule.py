@@ -81,10 +81,29 @@ class TmpTaintModule:
             return None
         if self.has_operand_with_role_on_memory_formula(operand, self.get_reg_vbr_role_name()) is False:
             return None
+        _vm_part_type = 'VB'  # Virtual Bus
+
+        # todo: test begin, see 1,166
+        _tainted_operands: list[TmpTaintedOperandForX64DbgTrace] = self.get_tainted_operands()
+        for _tainted_operand in _tainted_operands:
+            if _tainted_operand.is_the_operand_derived_from_me(operand) is True:
+                _tainted_by = _tainted_operand.get_tainted_by()
+                if 'ebp' not in _tainted_by:
+                    continue
+                _b_recognized = False
+                for _v_tainted_by in _tainted_by:
+                    if _v_tainted_by.find('VB_') != -1:
+                        _vm_part_type = 'VR'  # Virtual Register
+                        _b_recognized = True
+                        break
+                if _b_recognized is True:
+                    break
+        # todo: test end
+
         _vbr_value = self.get_reg_vbr_value()
         _operand_value: int = operand.get_operand_value()
         _vb_offset = _operand_value - _vbr_value
-        _vb_name = 'VB_0x%x' % _vb_offset
+        _vb_name = '%s_0x%x' % (_vm_part_type, _vb_offset)
         return _vb_name
 
     def add_tainted_operand_to_tainted_operands(
@@ -640,16 +659,16 @@ class TmpTaintModule:
                 )
 
             # todo: should be moved to somewhere to identify VR begin
-            # _tainted_by = _tainted_operand_to_add.get_tainted_by()
-            # _vb_found = False
-            # _vbr_found = False
-            # for _tb in _tainted_by:
-            #     if _tb.find('VB_') != -1:
-            #         _vb_found = True
-            #     elif _tb.find('ebp') != -1:
-            #         _vbr_found = True
-            # if _vb_found and _vbr_found:
-            #     _strs_to_show_in_comment.append('[LV2]')
+            _tainted_by = _tainted_operand_to_add.get_tainted_by()
+            _vb_found = False
+            _vbr_found = False
+            for _tb in _tainted_by:
+                if _tb.find('VB_') != -1:
+                    _vb_found = True
+                elif _tb.find('ebp') != -1:
+                    _vbr_found = True
+            if _vb_found and _vbr_found:
+                _strs_to_show_in_comment.append('[LV2]')
             # todo: should be moved to somewhere to identify VR end
 
         return _dst_tainted_operands, _src_tainted_operands, ', '.join(_strs_to_show_in_comment)
