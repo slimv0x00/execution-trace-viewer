@@ -867,7 +867,7 @@ class TmpTaintModule:
             if (_str_dst_operands.find('VB') != -1) or (_str_dst_operands.find('vbr') != -1)\
                     or (_str_src_operands.find('VB') != -1) or (_str_src_operands.find('vbr') != -1) \
                     or (_str_taint_trace.find('VB') != -1) or (_str_taint_trace.find('vbr') != -1):
-                _strs_to_show_in_comment.append('[T]')
+                _strs_to_show_in_comment.append('[LV1]')
             trace['comment'] = ' | '.join(_strs_to_show_in_comment)
 
         return trace

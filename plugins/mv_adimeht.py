@@ -95,7 +95,8 @@ class PluginMvAdimeht(IPlugin):
         self.capstone_bridge = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.capstone_bridge.detail = True
         self.context = TmpContext(capstone_bridge=self.capstone_bridge)
-        self.taintModule = TmpTaintModule(api, self.capstone_bridge, self.context, 0x3d7628)
+        self.taintModule = TmpTaintModule(api, self.capstone_bridge, self.context, 0x55568a)  # sample1_vm_addTwo
+        # self.taintModule = TmpTaintModule(api, self.capstone_bridge, self.context, 0x3d7628)  # sample2_vm_addTwo
         _input_dlg_data = [
             {'label': 'Trace boundary begin', 'data': '0x0'},
             {'label': 'Trace boundary end', 'data': '0x70000000'},
