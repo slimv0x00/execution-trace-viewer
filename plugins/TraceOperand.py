@@ -1,9 +1,9 @@
-from plugins.tmpContext import TmpContext
+from plugins.TraceContext import TraceContext
 
 import capstone
 
 
-class TmpOperandForX64DbgTrace:
+class TraceOperandForX64DbgTrace:
     operand_type: str = None
     operand_name: str = None
     operand_value: int = 0
@@ -14,13 +14,13 @@ class TmpOperandForX64DbgTrace:
     upper_register = None
 
     # context
-    context: TmpContext = None
+    context: TraceContext = None
 
     # type : 'reg' | 'imm', | 'mem' | 'fp' | 'invalid' | 'unknown',
     # name : 'eax' | '0x100' | [0x401000] | ? | 'invalid' | 'unknown',
     # value : 0x100 | 0x100 | 0x401000 (=addr) | ? | ? | ?,
     # formula : None | None | ['[', 'esp', '+', 40, ']'] | None | None | None,
-    def __init__(self, context: TmpContext, capstone_operand):
+    def __init__(self, context: TraceContext, capstone_operand):
         self.context = context
         if capstone_operand is not None:
             self.init_operand_by_capstone_operand(capstone_operand)

@@ -1,7 +1,7 @@
 import capstone
 
 
-class TmpContext:
+class TraceContext:
     # capstone.Cs
     capstone_bridge = None
 
@@ -35,7 +35,8 @@ class TmpContext:
     def get_register_names(self) -> list[str]:
         return self.register_names
 
-    def get_upper_register_name(self, register_name: str) -> str:
+    @staticmethod
+    def get_upper_register_name(register_name: str) -> str:
         _upper_register = None
         if register_name in ['eax', 'ax', 'ah', 'al']:
             _upper_register = 'eax'
