@@ -7,6 +7,7 @@ class TraceAdimehtOperandForX64DbgTrace(TraceTaintedOperandForX64DbgTrace):
         'VBR': 'virtual base register',
         'VB': 'virtual bridge',
         'VR': 'virtual register',
+        'LV': 'local variable',
     }
     determined_role: str = ''
     vm_part: str = ''
@@ -33,8 +34,14 @@ class TraceAdimehtOperandForX64DbgTrace(TraceTaintedOperandForX64DbgTrace):
         self.determined_role = determined_role
 
     def set_vm_part_by_using_offset_from_vbr(self, vbr):
-        _offset = self.get_operand_value() - vbr.get_operand_value()
-        self.force_set_vm_part('%s_0x%x' % (self.get_determined_role(), _offset))
+        _determined_role = self.get_determined_role()
+        _operand_value = self.get_operand_value()
+        _appendix = None
+        if _determined_role == 'LV':
+            _appendix = _operand_value
+        else:
+            _appendix = _operand_value - vbr.get_operand_value()
+        self.force_set_vm_part('%s_0x%x' % (_determined_role, _appendix))
 
     def force_set_vm_part(self, vm_part: str):
         self.vm_part = vm_part
