@@ -4,6 +4,8 @@ from plugins.TraceOperand import TraceOperandForX64DbgTrace
 from plugins.TraceAdimehtOperand import TraceAdimehtOperandForX64DbgTrace
 from plugins.TraceTaint import TraceTaint
 
+import capstone
+
 
 class TraceAdimeht(TraceTaint):
     you_are_in_vm: bool = False
@@ -23,8 +25,9 @@ class TraceAdimeht(TraceTaint):
 
     logging_you_are_in_vm: bool = False
     logging_on_vm_role_identified: bool = False
-    logging_on_vr_identified: bool = True
-    logging_on_lv_identified: bool = True
+    logging_on_vr_identified: bool = False
+    logging_on_lv_identified: bool = False
+    logging_llvm_ir_operands: bool = False
     logging_llvm_ir: bool = True
 
     def __init__(self, api: Api, capstone_bridge, context: TraceContext, vbr_value: int):
@@ -97,7 +100,7 @@ class TraceAdimeht(TraceTaint):
                 _result.append(_tainted_by)
         return _result
 
-    def identify_the_role_of_vm_part_for_operand(self, operand: TraceOperandForX64DbgTrace):
+    def identify_the_role_of_vm_part_for_operand(self, operand: TraceOperandForX64DbgTrace, from_memory_formula: bool=False):
         _identified_role = None
         _tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = self.get_tainted_operands()
         for _tainted_operand in _tainted_operands:
@@ -184,52 +187,142 @@ class TraceAdimeht(TraceTaint):
         for _operand in operands:
             self.identify_the_role_of_vm_part_for_operand(_operand)
 
+    def resolve_operands_to_adimeht_operands(self, operands: list[TraceOperandForX64DbgTrace])\
+            -> list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace]:
+        _result = []
+        for _operand in operands:
+            _operand_from_tainted_operands = self.retrieve_same_operand_from_tainted_operands(_operand)
+            if _operand_from_tainted_operands is None:
+                _result.append(_operand)
+                continue
+            _result.append(_operand_from_tainted_operands)
+        return _result
+
+    @staticmethod
+    def operands_contains_operand_for_llvm_ir(
+            operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
+    ):
+        _result = False
+        _determined_roles_to_follow = ['VR', 'LV']
+        for _operand in operands:
+            if type(_operand) is not TraceAdimehtOperandForX64DbgTrace:
+                continue
+            _determined_role = _operand.get_determined_role()
+            if _determined_role not in _determined_roles_to_follow:
+                continue
+            _result = True
+            break
+        return _result
+
+    def print_llvm_ir_related_operands(
+            self,
+            operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
+            operand_type_to_show: str,
+    ):
+        for _operand in operands:
+            if type(_operand) is TraceOperandForX64DbgTrace:
+                self.logs_to_show_in_comment.append('[%s: %s]' % (operand_type_to_show, _operand.get_operand_name()))
+            elif type(_operand) is TraceAdimehtOperandForX64DbgTrace:
+                self.logs_to_show_in_comment.append('[%s: %s (%s)]'
+                                                    % (operand_type_to_show, _operand.get_vm_part(), _operand.get_tainted_by()))
+            else:
+                self.logs_to_show_in_comment.append('[%s: %s (%s)]'
+                                                    % (
+                                                        operand_type_to_show,
+                                                        _operand.get_operand_name(),
+                                                        _operand.get_tainted_by(),
+                                                    ))
+
+    def generate_llvm_ir(
+            self,
+            dst_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
+            src_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
+    ):
+        if len(dst_operands) > 1 or len(src_operands) > 1:
+            raise Exception('[E] Cannot generate LLVM IR : Too many operand\n - Dst : %s\n - Src : %s'
+                            % (dst_operands, src_operands))
+
+        _dst = None
+        if len(dst_operands) > 0:
+            if type(dst_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
+                _dst = dst_operands[0].get_vm_part()
+            else:
+                _dst = dst_operands[0].get_operand_name()
+        _src = None
+        if len(src_operands) > 0:
+            if type(src_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
+                _src = src_operands[0].get_vm_part()
+            else:
+                _src = src_operands[0].get_operand_name()
+
+        if len(self.context.current_capstone_instruction.groups) > 0:
+            for _g in self.context.current_capstone_instruction.groups:
+                if _g == capstone.x86.X86_GRP_CALL:
+                    self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
+                    return
+                elif _g == capstone.x86.X86_GRP_JUMP:
+                    raise Exception('[E] Cannot generate LLVM IR : Unhandled instruction')
+                elif _g == capstone.x86.X86_GRP_RET or _g == capstone.x86.X86_GRP_IRET:
+                    self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
+                    return
+
+        if self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_MOV,
+            capstone.x86.X86_INS_PUSH,
+            capstone.x86.X86_INS_PUSHFD,
+            capstone.x86.X86_INS_POP,
+            capstone.x86.X86_INS_POPFD,
+        ]:
+            self.logs_to_show_in_comment.append('MOV %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_ADD,
+        ]:
+            self.logs_to_show_in_comment.append('ADD %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_SUB,
+        ]:
+            self.logs_to_show_in_comment.append('SUB %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_XCHG,
+        ]:
+            # self.logs_to_show_in_comment.append('XCHG %s, %s' % (_dst, _src))
+            self.logs_to_show_in_comment.append('MOV %%tmp, %s' % _src)
+            self.logs_to_show_in_comment.append('MOV %s, %s' % (_src, _dst))
+            self.logs_to_show_in_comment.append('MOV %s, %%tmp' % _dst)
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_CMPXCHG,
+        ]:
+            self.logs_to_show_in_comment.append('CMPXCHG %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_LEA,
+        ]:
+            self.logs_to_show_in_comment.append('LEA')  # todo: YOU ARE WORKING ON THIS CODE (2024-05-10)
+        else:
+            raise Exception('[E] Cannot generate LLVM IR : Unhandled instruction')
+
     def generate_llvm_ir_by_using_vr_related_instruction(
             self,
             dst_operands: list[TraceOperandForX64DbgTrace],
             src_operands: list[TraceOperandForX64DbgTrace],
     ):
-        for _dst_operand in dst_operands:
-            _dst_operand_from_tainted_operands = self.retrieve_same_operand_from_tainted_operands(_dst_operand)
-            if _dst_operand_from_tainted_operands is None:
-                continue
-
-            if type(_dst_operand_from_tainted_operands) is not TraceAdimehtOperandForX64DbgTrace:
-                continue
-
-            _dst_vr_list = self.get_vm_part_from_tainted_by_for_operand(_dst_operand_from_tainted_operands, 'VR')
-            if len(_dst_vr_list) > 0:
-                self.logs_to_show_in_comment.append('[%s : %s from %s (%s)]'
-                                                    % (
-                                                        _dst_operand_from_tainted_operands.get_vm_part(),
-                                                        _dst_operand_from_tainted_operands.get_operand_name(),
-                                                        _dst_operand_from_tainted_operands.get_tainted_by(),
-                                                        _dst_operand_from_tainted_operands.get_derived_from(),
-                                                    ))
-        for _src_operand in src_operands:
-            _src_operand_from_tainted_operands = self.retrieve_same_operand_from_tainted_operands(_src_operand)
-            if _src_operand_from_tainted_operands is None:
-                continue
-
-            if type(_src_operand_from_tainted_operands) is not TraceAdimehtOperandForX64DbgTrace:
-                continue
-
-            _src_vr_list = self.get_vm_part_from_tainted_by_for_operand(_src_operand_from_tainted_operands, 'VR')
-            if len(_src_vr_list) > 0:
-                self.logs_to_show_in_comment.append('[%s : %s from %s (%s)]'
-                                                    % (
-                                                        _src_operand_from_tainted_operands.get_vm_part(),
-                                                        _src_operand_from_tainted_operands.get_operand_name(),
-                                                        _src_operand_from_tainted_operands.get_tainted_by(),
-                                                        _src_operand_from_tainted_operands.get_derived_from(),
-                                                    ))
+        _dst_adimeht_operands = self.resolve_operands_to_adimeht_operands(dst_operands)
+        _src_adimeht_operands = self.resolve_operands_to_adimeht_operands(src_operands)
+        _dst_should_be_converted = self.operands_contains_operand_for_llvm_ir(_dst_adimeht_operands)
+        _src_should_be_converted = self.operands_contains_operand_for_llvm_ir(_src_adimeht_operands)
+        if _dst_should_be_converted is False and _src_should_be_converted is False:
+            return
+        if self.logging_llvm_ir:
+            self.generate_llvm_ir(_dst_adimeht_operands, _src_adimeht_operands)
+        if self.logging_llvm_ir_operands:
+            self.print_llvm_ir_related_operands(_dst_adimeht_operands, 'dst')
+            self.print_llvm_ir_related_operands(_src_adimeht_operands, 'src')
 
     def run_adimeht_single_line_by_x64dbg_trace(self, x64dbg_trace):
         self.logs_to_show_in_comment = []
         self.context.set_context_by_x64dbg_trace(x64dbg_trace)
 
         # todo: for debugging begin ##################################
-        if self.context.x64dbg_trace['id'] == 11642:
+        if self.context.x64dbg_trace['id'] == 39043:
             self.api.print(self.context.x64dbg_trace['id'])
         # todo: for debugging end ##################################
 
@@ -245,7 +338,7 @@ class TraceAdimeht(TraceTaint):
         self.identify_the_role_of_vm_part_for_operands(_dst_operands)
         self.identify_the_role_of_vm_part_for_operands(_src_operands)
 
-        # self.generate_llvm_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
+        self.generate_llvm_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
 
         # back up logs
         _logs_to_show_in_comment = self.logs_to_show_in_comment
