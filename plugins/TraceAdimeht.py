@@ -100,7 +100,10 @@ class TraceAdimeht(TraceTaint):
                 _result.append(_tainted_by)
         return _result
 
-    def identify_the_role_of_vm_part_for_operand(self, operand: TraceOperandForX64DbgTrace, from_memory_formula: bool=False):
+    def identify_the_role_of_vm_part_for_operand(
+            self,
+            operand: TraceOperandForX64DbgTrace,
+    ):
         _identified_role = None
         _tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = self.get_tainted_operands()
         for _tainted_operand in _tainted_operands:
@@ -183,9 +186,19 @@ class TraceAdimeht(TraceTaint):
 
         return _identified_role
 
-    def identify_the_role_of_vm_part_for_operands(self, operands: list[TraceOperandForX64DbgTrace]):
+    def identify_the_role_of_vm_part_for_operands(
+            self,
+            operands: list[TraceOperandForX64DbgTrace],
+            from_memory_formula: bool = False,
+    ):
         for _operand in operands:
-            self.identify_the_role_of_vm_part_for_operand(_operand)
+            if from_memory_formula:
+                _memory_variables: list[TraceOperandForX64DbgTrace] = \
+                    self.retrieve_operands_from_input_operand_memory_formulas(_operand)
+                for _memory_variable in _memory_variables:
+                    self.identify_the_role_of_vm_part_for_operand(_memory_variable)
+            else:
+                self.identify_the_role_of_vm_part_for_operand(_operand)
 
     def resolve_operands_to_adimeht_operands(self, operands: list[TraceOperandForX64DbgTrace])\
             -> list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace]:
@@ -275,6 +288,10 @@ class TraceAdimeht(TraceTaint):
         ]:
             self.logs_to_show_in_comment.append('MOV %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_MOVZX,
+        ]:
+            self.logs_to_show_in_comment.append('MOVZX %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_ADD,
         ]:
             self.logs_to_show_in_comment.append('ADD %s, %s' % (_dst, _src))
@@ -294,9 +311,21 @@ class TraceAdimeht(TraceTaint):
         ]:
             self.logs_to_show_in_comment.append('CMPXCHG %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_LEA,
+            capstone.x86.X86_INS_AND,
         ]:
-            self.logs_to_show_in_comment.append('LEA')  # todo: YOU ARE WORKING ON THIS CODE (2024-05-10)
+            self.logs_to_show_in_comment.append('AND %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_OR,
+        ]:
+            self.logs_to_show_in_comment.append('OR %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_XOR,
+        ]:
+            self.logs_to_show_in_comment.append('XOR %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_CMP,
+        ]:
+            self.logs_to_show_in_comment.append('CMP %s, %s' % (_dst, _src))
         else:
             raise Exception('[E] Cannot generate LLVM IR : Unhandled instruction')
 
@@ -336,7 +365,12 @@ class TraceAdimeht(TraceTaint):
         _dst_operands, _src_operands = self.retrieve_dst_and_src_operands(x64dbg_trace)
 
         self.identify_the_role_of_vm_part_for_operands(_dst_operands)
-        self.identify_the_role_of_vm_part_for_operands(_src_operands)
+        _from_memory_formula = False  # will be set as True when it's LEA
+        if self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_LEA,
+        ]:
+            _from_memory_formula = True
+        self.identify_the_role_of_vm_part_for_operands(_src_operands, from_memory_formula=_from_memory_formula)
 
         self.generate_llvm_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
 
