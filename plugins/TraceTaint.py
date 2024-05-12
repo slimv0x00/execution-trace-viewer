@@ -292,6 +292,20 @@ class TraceTaint:
             return None
         return _result[0]
 
+    def retrieve_operands_from_input_operand_memory_formulas(
+            self,
+            operand: TraceOperandForX64DbgTrace
+    ) -> list[TraceOperandForX64DbgTrace]:
+        _result: list[TraceOperandForX64DbgTrace] = []
+        _memory_formula = operand.get_memory_formula()
+        for _memory_variable in _memory_formula:
+            # is register
+            if _memory_variable in self.context.register_names:
+                _operand = TraceTaintedOperandForX64DbgTrace(self.context, None)
+                _operand.force_set_operand_as_register(_memory_variable)
+                _result.append(_operand)
+        return _result
+
     def retrieve_derived_tainted_operands_from_input_operand_memory_formulas(
             self,
             operand: TraceOperandForX64DbgTrace,
