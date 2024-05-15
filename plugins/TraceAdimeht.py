@@ -27,8 +27,8 @@ class TraceAdimeht(TraceTaint):
     logging_on_vm_role_identified: bool = False
     logging_on_vr_identified: bool = False
     logging_on_lv_identified: bool = False
-    logging_llvm_ir_operands: bool = False
-    logging_llvm_ir: bool = True
+    logging_pseudo_ir_operands: bool = False
+    logging_pseudo_ir: bool = True
 
     def __init__(self, api: Api, capstone_bridge, context: TraceContext, vbr_value: int):
         super().__init__(api, capstone_bridge, context)
@@ -212,7 +212,7 @@ class TraceAdimeht(TraceTaint):
         return _result
 
     @staticmethod
-    def operands_contains_operand_for_llvm_ir(
+    def operands_contains_operand_for_pseudo_ir(
             operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
     ):
         _result = False
@@ -227,7 +227,7 @@ class TraceAdimeht(TraceTaint):
             break
         return _result
 
-    def print_llvm_ir_related_operands(
+    def print_pseudo_ir_related_operands(
             self,
             operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
             operand_type_to_show: str,
@@ -246,25 +246,29 @@ class TraceAdimeht(TraceTaint):
                                                         _operand.get_tainted_by(),
                                                     ))
 
-    def generate_llvm_ir(
+    def generate_pseudo_ir(
             self,
             dst_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
             src_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
     ):
         if len(dst_operands) > 1 or len(src_operands) > 1:
-            raise Exception('[E] Cannot generate LLVM IR : Too many operand\n - Dst : %s\n - Src : %s'
+            raise Exception('[E] Cannot generate pseudo IR : Too many operand\n - Dst : %s\n - Src : %s'
                             % (dst_operands, src_operands))
 
         _dst = None
         if len(dst_operands) > 0:
             if type(dst_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
                 _dst = dst_operands[0].get_vm_part()
+                if _dst == '':
+                    _dst = dst_operands[0].get_operand_name()
             else:
                 _dst = dst_operands[0].get_operand_name()
         _src = None
         if len(src_operands) > 0:
             if type(src_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
                 _src = src_operands[0].get_vm_part()
+                if _src == '':
+                    _src = src_operands[0].get_operand_name()
             else:
                 _src = src_operands[0].get_operand_name()
 
@@ -274,7 +278,7 @@ class TraceAdimeht(TraceTaint):
                     self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
                     return
                 elif _g == capstone.x86.X86_GRP_JUMP:
-                    raise Exception('[E] Cannot generate LLVM IR : Unhandled instruction')
+                    raise Exception('[E] Cannot generate pseudo IR : Unhandled instruction')
                 elif _g == capstone.x86.X86_GRP_RET or _g == capstone.x86.X86_GRP_IRET:
                     self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
                     return
@@ -327,31 +331,31 @@ class TraceAdimeht(TraceTaint):
         ]:
             self.logs_to_show_in_comment.append('CMP %s, %s' % (_dst, _src))
         else:
-            raise Exception('[E] Cannot generate LLVM IR : Unhandled instruction')
+            raise Exception('[E] Cannot generate pseudo IR : Unhandled instruction')
 
-    def generate_llvm_ir_by_using_vr_related_instruction(
+    def generate_pseudo_ir_by_using_vr_related_instruction(
             self,
             dst_operands: list[TraceOperandForX64DbgTrace],
             src_operands: list[TraceOperandForX64DbgTrace],
     ):
         _dst_adimeht_operands = self.resolve_operands_to_adimeht_operands(dst_operands)
         _src_adimeht_operands = self.resolve_operands_to_adimeht_operands(src_operands)
-        _dst_should_be_converted = self.operands_contains_operand_for_llvm_ir(_dst_adimeht_operands)
-        _src_should_be_converted = self.operands_contains_operand_for_llvm_ir(_src_adimeht_operands)
+        _dst_should_be_converted = self.operands_contains_operand_for_pseudo_ir(_dst_adimeht_operands)
+        _src_should_be_converted = self.operands_contains_operand_for_pseudo_ir(_src_adimeht_operands)
         if _dst_should_be_converted is False and _src_should_be_converted is False:
             return
-        if self.logging_llvm_ir:
-            self.generate_llvm_ir(_dst_adimeht_operands, _src_adimeht_operands)
-        if self.logging_llvm_ir_operands:
-            self.print_llvm_ir_related_operands(_dst_adimeht_operands, 'dst')
-            self.print_llvm_ir_related_operands(_src_adimeht_operands, 'src')
+        if self.logging_pseudo_ir:
+            self.generate_pseudo_ir(_dst_adimeht_operands, _src_adimeht_operands)
+        if self.logging_pseudo_ir_operands:
+            self.print_pseudo_ir_related_operands(_dst_adimeht_operands, 'dst')
+            self.print_pseudo_ir_related_operands(_src_adimeht_operands, 'src')
 
     def run_adimeht_single_line_by_x64dbg_trace(self, x64dbg_trace):
         self.logs_to_show_in_comment = []
         self.context.set_context_by_x64dbg_trace(x64dbg_trace)
 
         # todo: for debugging begin ##################################
-        if self.context.x64dbg_trace['id'] == 39043:
+        if self.context.x64dbg_trace['id'] == 9533:
             self.api.print(self.context.x64dbg_trace['id'])
         # todo: for debugging end ##################################
 
@@ -372,7 +376,7 @@ class TraceAdimeht(TraceTaint):
             _from_memory_formula = True
         self.identify_the_role_of_vm_part_for_operands(_src_operands, from_memory_formula=_from_memory_formula)
 
-        self.generate_llvm_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
+        self.generate_pseudo_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
 
         # back up logs
         _logs_to_show_in_comment = self.logs_to_show_in_comment
