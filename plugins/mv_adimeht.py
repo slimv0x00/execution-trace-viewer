@@ -121,12 +121,80 @@ class PluginMvAdimeht(IPlugin):
         _result.append(_arg_3)
         self.taintModule.set_tainted_operands(_result)
 
+    def set_preset_of_tainted_operands_for_sample_3(self, trace):
+        _result = self.get_registers_as_tainted_operand_list(trace)
+        # argument 1
+        _arg_1 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
+        _mem_addr = 0x19ff0c
+        _arg_1.force_set_adimeht_operand(
+            'mem',
+            '[0x%08x]' % _mem_addr,
+            _mem_addr,
+            ('[ 0x%08x ]' % _mem_addr).split(' '),
+            ['arg_1'],
+            'IMM',
+        )
+        _result.append(_arg_1)
+        # argument 2
+        _arg_2 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
+        _mem_addr = 0x19ff10
+        _arg_2.force_set_adimeht_operand(
+            'mem',
+            '[0x%08x]' % _mem_addr,
+            _mem_addr,
+            ('[ 0x%08x ]' % _mem_addr).split(' '),
+            ['arg_2'],
+            'IMM',
+        )
+        _result.append(_arg_2)
+        self.taintModule.set_tainted_operands(_result)
+
+    def set_preset_of_tainted_operands_for_sample_4(self, trace):
+        _result = self.get_registers_as_tainted_operand_list(trace)
+        # argument 1
+        _arg_1 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
+        _mem_addr = 0x19ff04
+        _arg_1.force_set_adimeht_operand(
+            'mem',
+            '[0x%08x]' % _mem_addr,
+            _mem_addr,
+            ('[ 0x%08x ]' % _mem_addr).split(' '),
+            ['arg_1'],
+            'IMM',
+        )
+        _result.append(_arg_1)
+        # argument 2
+        _arg_2 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
+        _mem_addr = 0x19ff08
+        _arg_2.force_set_adimeht_operand(
+            'mem',
+            '[0x%08x]' % _mem_addr,
+            _mem_addr,
+            ('[ 0x%08x ]' % _mem_addr).split(' '),
+            ['arg_2'],
+            'IMM',
+        )
+        _result.append(_arg_2)
+        # argument 3
+        _arg_3 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
+        _mem_addr = 0x19ff0c
+        _arg_3.force_set_adimeht_operand(
+            'mem',
+            '[0x%08x]' % _mem_addr,
+            _mem_addr,
+            ('[ 0x%08x ]' % _mem_addr).split(' '),
+            ['arg_3'],
+            'IMM',
+        )
+        _result.append(_arg_3)
+        self.taintModule.set_tainted_operands(_result)
+
     def execute(self, api: Api):
         self.api = api
         self.capstone_bridge = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.capstone_bridge.detail = True
         self.context = TraceContext(capstone_bridge=self.capstone_bridge)
-        _preset_id = 2
+        _preset_id = 3
         _input_dlg_data = [
             {'label': 'Trace boundary begin', 'data': '0x0'},
             {'label': 'Trace boundary end', 'data': '0x70000000'},
@@ -155,12 +223,12 @@ class PluginMvAdimeht(IPlugin):
         elif _str_vbr == 'preset2':
             # sample2_vm_addTwo
             self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x3d7628)
-        # elif _str_vbr == 'preset3':
-        #     # sample1_vm_addTwo_3.1.8
-        #     self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x462f0c)
-        # elif _str_vbr == 'preset4':
-        #     # sample2_vm_addTwo_3.1.8
-        #     self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x4543ea)
+        elif _str_vbr == 'preset3':
+            # sample1_vm_addTwo_3.1.8
+            self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x462f0c)
+        elif _str_vbr == 'preset4':
+            # sample2_vm_addTwo_3.1.8
+            self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x4543ea)
         # else:
         #     _vbr = int(_str_vbr, 16)
         #     self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, _vbr)
@@ -200,10 +268,10 @@ class PluginMvAdimeht(IPlugin):
                         self.set_preset_of_tainted_operands_for_sample_1(_x64dbg_trace)
                     elif _target_operand == 'preset2':
                         self.set_preset_of_tainted_operands_for_sample_2(_x64dbg_trace)
-                    # elif _target_operand == 'preset3':
-                    #     self.set_preset_of_tainted_operands_for_sample_3(_x64dbg_trace)
-                    # elif _target_operand == 'preset4':
-                    #     self.set_preset_of_tainted_operands_for_sample_4(_x64dbg_trace)
+                    elif _target_operand == 'preset3':
+                        self.set_preset_of_tainted_operands_for_sample_3(_x64dbg_trace)
+                    elif _target_operand == 'preset4':
+                        self.set_preset_of_tainted_operands_for_sample_4(_x64dbg_trace)
                     else:
                         pass
                     self.api.print('[+] Initial tainted operands are set : ')

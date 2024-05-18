@@ -275,10 +275,11 @@ class TraceAdimeht(TraceTaint):
         if len(self.context.current_capstone_instruction.groups) > 0:
             for _g in self.context.current_capstone_instruction.groups:
                 if _g == capstone.x86.X86_GRP_CALL:
-                    self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
+                    self.logs_to_show_in_comment.append('CALL %s' % _src)
                     return
                 elif _g == capstone.x86.X86_GRP_JUMP:
-                    raise Exception('[E] Cannot generate pseudo IR : Unhandled instruction')
+                    self.logs_to_show_in_comment.append('JMP %s' % _src)
+                    return
                 elif _g == capstone.x86.X86_GRP_RET or _g == capstone.x86.X86_GRP_IRET:
                     self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
                     return
@@ -330,6 +331,10 @@ class TraceAdimeht(TraceTaint):
             capstone.x86.X86_INS_CMP,
         ]:
             self.logs_to_show_in_comment.append('CMP %s, %s' % (_dst, _src))
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_DEC,
+        ]:
+            self.logs_to_show_in_comment.append('DEC %s' % _dst)
         else:
             raise Exception('[E] Cannot generate pseudo IR : Unhandled instruction')
 
