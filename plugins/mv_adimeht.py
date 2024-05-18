@@ -3,6 +3,7 @@ from core.api import Api
 from plugins.TraceContext import TraceContext
 from plugins.TraceAdimehtOperand import TraceAdimehtOperandForX64DbgTrace
 from plugins.TraceAdimeht import TraceAdimeht
+from plugins.TraceTaint import TraceTaint
 
 import capstone
 import traceback
@@ -16,7 +17,17 @@ class PluginMvAdimeht(IPlugin):
     # context
     context: TraceContext = None
 
-    taintModule = None
+    adimehtModule: TraceAdimeht = None
+    adimeht_logging_every_tainted_operands: bool = False
+    adimeht_logging_operands_for_instruction: bool = False
+    adimeht_logging_on_adding_and_removing_tainted_operand: bool = False
+    adimeht_logging_detail_of_tainted_operand_on_adding: bool = True
+
+    taintModule: TraceTaint = None
+    taint_logging_every_tainted_operands: bool = False
+    taint_logging_operands_for_instruction: bool = False
+    taint_logging_on_adding_and_removing_tainted_operand: bool = True
+    taint_logging_detail_of_tainted_operand_on_adding: bool = False
 
     def get_registers_as_tainted_operand_list(self, trace) -> list[TraceAdimehtOperandForX64DbgTrace]:
         self.context.set_context_by_x64dbg_trace(trace)
@@ -53,7 +64,7 @@ class PluginMvAdimeht(IPlugin):
 
         return _result
 
-    def set_preset_of_tainted_operands_for_sample_1(self, trace):
+    def get_preset_of_tainted_operands_for_sample_1(self, trace):
         _result = self.get_registers_as_tainted_operand_list(trace)
         # argument 1
         _arg_1 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
@@ -79,9 +90,9 @@ class PluginMvAdimeht(IPlugin):
             'IMM',
         )
         _result.append(_arg_2)
-        self.taintModule.set_tainted_operands(_result)
+        return _result
 
-    def set_preset_of_tainted_operands_for_sample_2(self, trace):
+    def get_preset_of_tainted_operands_for_sample_2(self, trace):
         _result = self.get_registers_as_tainted_operand_list(trace)
         # argument 1
         _arg_1 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
@@ -119,9 +130,9 @@ class PluginMvAdimeht(IPlugin):
             'IMM',
         )
         _result.append(_arg_3)
-        self.taintModule.set_tainted_operands(_result)
+        return _result
 
-    def set_preset_of_tainted_operands_for_sample_3(self, trace):
+    def get_preset_of_tainted_operands_for_sample_3(self, trace):
         _result = self.get_registers_as_tainted_operand_list(trace)
         # argument 1
         _arg_1 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
@@ -147,9 +158,9 @@ class PluginMvAdimeht(IPlugin):
             'IMM',
         )
         _result.append(_arg_2)
-        self.taintModule.set_tainted_operands(_result)
+        return _result
 
-    def set_preset_of_tainted_operands_for_sample_4(self, trace):
+    def get_preset_of_tainted_operands_for_sample_4(self, trace):
         _result = self.get_registers_as_tainted_operand_list(trace)
         # argument 1
         _arg_1 = TraceAdimehtOperandForX64DbgTrace(self.context, None)
@@ -187,14 +198,14 @@ class PluginMvAdimeht(IPlugin):
             'IMM',
         )
         _result.append(_arg_3)
-        self.taintModule.set_tainted_operands(_result)
+        return _result
 
     def execute(self, api: Api):
         self.api = api
         self.capstone_bridge = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.capstone_bridge.detail = True
         self.context = TraceContext(capstone_bridge=self.capstone_bridge)
-        _preset_id = 3
+        _preset_id = 1
         _input_dlg_data = [
             {'label': 'Trace boundary begin', 'data': '0x0'},
             {'label': 'Trace boundary end', 'data': '0x70000000'},
@@ -217,21 +228,41 @@ class PluginMvAdimeht(IPlugin):
         _address_boundary_to_trace_begin = int(_str_address_boundary_to_trace_begin, 16)
         _address_boundary_to_trace_end = int(_str_address_boundary_to_trace_end, 16)
 
+        _vbr: int | None = None
         if _str_vbr == 'preset1':
             # sample1_vm_addTwo
-            self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x55568a)
+            _vbr = 0x55568a
         elif _str_vbr == 'preset2':
             # sample2_vm_addTwo
-            self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x3d7628)
+            _vbr = 0x3d7628
         elif _str_vbr == 'preset3':
             # sample1_vm_addTwo_3.1.8
-            self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x462f0c)
+            _vbr = 0x462f0c
         elif _str_vbr == 'preset4':
             # sample2_vm_addTwo_3.1.8
-            self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, 0x4543ea)
+            _vbr = 0x4543ea
         # else:
         #     _vbr = int(_str_vbr, 16)
-        #     self.taintModule = TraceAdimeht(api, self.capstone_bridge, self.context, _vbr)
+
+        self.adimehtModule = TraceAdimeht(
+            api,
+            self.capstone_bridge,
+            self.context,
+            _vbr,
+            logging_every_tainted_operands=self.adimeht_logging_every_tainted_operands,
+            logging_operands_for_instruction=self.adimeht_logging_operands_for_instruction,
+            logging_on_adding_and_removing_tainted_operand=self.adimeht_logging_on_adding_and_removing_tainted_operand,
+            logging_detail_of_tainted_operand_on_adding=self.adimeht_logging_detail_of_tainted_operand_on_adding,
+        )
+        self.taintModule = TraceTaint(
+            api,
+            self.capstone_bridge,
+            self.context,
+            logging_every_tainted_operands=self.taint_logging_every_tainted_operands,
+            logging_operands_for_instruction=self.taint_logging_operands_for_instruction,
+            logging_on_adding_and_removing_tainted_operand=self.taint_logging_on_adding_and_removing_tainted_operand,
+            logging_detail_of_tainted_operand_on_adding=self.taint_logging_detail_of_tainted_operand_on_adding,
+        )
 
         self.api.print('[+] Run taint analysis')
         self.api.print(' - Address boundary to trace : 0x%08x ~ 0x%08x'
@@ -264,24 +295,40 @@ class PluginMvAdimeht(IPlugin):
                     continue
 
                 if _index == _target_index:
+                    _preset = []
                     if _target_operand == 'preset1':
-                        self.set_preset_of_tainted_operands_for_sample_1(_x64dbg_trace)
+                        _preset = self.get_preset_of_tainted_operands_for_sample_1(_x64dbg_trace)
                     elif _target_operand == 'preset2':
-                        self.set_preset_of_tainted_operands_for_sample_2(_x64dbg_trace)
+                        _preset = self.get_preset_of_tainted_operands_for_sample_2(_x64dbg_trace)
                     elif _target_operand == 'preset3':
-                        self.set_preset_of_tainted_operands_for_sample_3(_x64dbg_trace)
+                        _preset = self.get_preset_of_tainted_operands_for_sample_3(_x64dbg_trace)
                     elif _target_operand == 'preset4':
-                        self.set_preset_of_tainted_operands_for_sample_4(_x64dbg_trace)
-                    else:
-                        pass
+                        _preset = self.get_preset_of_tainted_operands_for_sample_4(_x64dbg_trace)
+                    self.adimehtModule.set_tainted_operands(_preset[:])
+                    self.taintModule.set_tainted_operands(_preset[:])
                     self.api.print('[+] Initial tainted operands are set : ')
-                    [self.api.print(str(_op)) for _op in self.taintModule.tainted_operands]
+                    [self.api.print(str(_op)) for _op in self.adimehtModule.tainted_operands]
 
-                _new_trace = self.taintModule.run_adimeht_single_line_by_x64dbg_trace(_x64dbg_trace)
-                if _new_trace is None:
+                # todo: for debugging begin ##################################
+                if self.context.x64dbg_trace['id'] == 9933:
+                    self.api.print(self.context.x64dbg_trace['id'])
+                # todo: for debugging end ##################################
+
+                _new_trace_taint = self.taintModule.run_taint_single_line_by_x64dbg_trace(_x64dbg_trace.copy())
+                if _new_trace_taint is None:
                     _traces_to_show.append(_x64dbg_trace.copy())
                     break
-                _traces_to_show.append(_new_trace.copy())
+                _new_trace_adimeht = self.adimehtModule.run_adimeht_single_line_by_x64dbg_trace(_x64dbg_trace.copy())
+                if _new_trace_adimeht is None:
+                    _traces_to_show.append(_x64dbg_trace.copy())
+                    break
+                _comments = []
+                if _new_trace_adimeht['comment'] != '':
+                    _comments.append(_new_trace_adimeht['comment'])
+                if _new_trace_taint['comment'] != '':
+                    _comments.append(_new_trace_taint['comment'])
+                _x64dbg_trace['comment'] = ' | '.join(_comments)
+                _traces_to_show.append(_x64dbg_trace)
             except Exception as e:
                 _traces_to_show.append(_x64dbg_trace.copy())
                 print(traceback.format_exc())

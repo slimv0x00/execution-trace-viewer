@@ -28,7 +28,16 @@ class TraceTaint:
     logging_on_adding_and_removing_tainted_operand: bool = False
     logging_detail_of_tainted_operand_on_adding: bool = False
 
-    def __init__(self, api: Api, capstone_bridge, context: TraceContext):
+    def __init__(
+            self,
+            api: Api,
+            capstone_bridge,
+            context: TraceContext,
+            logging_every_tainted_operands: bool = False,
+            logging_operands_for_instruction: bool = False,
+            logging_on_adding_and_removing_tainted_operand: bool = False,
+            logging_detail_of_tainted_operand_on_adding: bool = False,
+    ):
         self.api = api
         if capstone_bridge is None:
             self.capstone_bridge = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
@@ -39,6 +48,11 @@ class TraceTaint:
             self.context = TraceContext(capstone_bridge=self.capstone_bridge)
         else:
             self.context = context
+
+        self.logging_every_tainted_operands = logging_every_tainted_operands
+        self.logging_operands_for_instruction = logging_operands_for_instruction
+        self.logging_on_adding_and_removing_tainted_operand = logging_on_adding_and_removing_tainted_operand
+        self.logging_detail_of_tainted_operand_on_adding = logging_detail_of_tainted_operand_on_adding
 
     def get_tainted_operands(self) -> list[TraceTaintedOperandForX64DbgTrace]:
         return self.tainted_operands
@@ -620,8 +634,8 @@ class TraceTaint:
         self.logs_to_show_in_comment = []
 
         # # todo: for debugging begin ##################################
-        # if self.context.x64dbg_trace['id'] == 9933:
-        #     self.api.print(self.context.x64dbg_trace['id'])
+        if self.context.x64dbg_trace['id'] == 218:
+            self.api.print(self.context.x64dbg_trace['id'])
         # # todo: for debugging end ##################################
 
         self.context.set_context_by_x64dbg_trace(x64dbg_trace)

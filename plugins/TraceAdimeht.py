@@ -30,8 +30,26 @@ class TraceAdimeht(TraceTaint):
     logging_pseudo_ir_operands: bool = False
     logging_pseudo_ir: bool = True
 
-    def __init__(self, api: Api, capstone_bridge, context: TraceContext, vbr_value: int):
-        super().__init__(api, capstone_bridge, context)
+    def __init__(
+            self,
+            api: Api,
+            capstone_bridge,
+            context: TraceContext,
+            vbr_value: int,
+            logging_every_tainted_operands: bool = False,
+            logging_operands_for_instruction: bool = False,
+            logging_on_adding_and_removing_tainted_operand: bool = False,
+            logging_detail_of_tainted_operand_on_adding: bool = False,
+    ):
+        super().__init__(
+            api,
+            capstone_bridge,
+            context,
+            logging_every_tainted_operands=logging_every_tainted_operands,
+            logging_operands_for_instruction=logging_operands_for_instruction,
+            logging_on_adding_and_removing_tainted_operand=logging_on_adding_and_removing_tainted_operand,
+            logging_detail_of_tainted_operand_on_adding=logging_detail_of_tainted_operand_on_adding,
+        )
 
         # set VBR (Virtual machine Base Register)
         self.reg_vbr = TraceAdimehtOperandForX64DbgTrace(self.context, None)
@@ -106,6 +124,7 @@ class TraceAdimeht(TraceTaint):
     ):
         _identified_role = None
         _tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = self.get_tainted_operands()
+        _tainted_by_for_tainted_operand: list[str] = []
         for _tainted_operand in _tainted_operands:
             if _tainted_operand.is_the_operand_derived_from_me(operand) is False:
                 continue
@@ -237,7 +256,11 @@ class TraceAdimeht(TraceTaint):
                 self.logs_to_show_in_comment.append('[%s: %s]' % (operand_type_to_show, _operand.get_operand_name()))
             elif type(_operand) is TraceAdimehtOperandForX64DbgTrace:
                 self.logs_to_show_in_comment.append('[%s: %s (%s)]'
-                                                    % (operand_type_to_show, _operand.get_vm_part(), _operand.get_tainted_by()))
+                                                    % (
+                                                        operand_type_to_show,
+                                                        _operand.get_vm_part(),
+                                                        _operand.get_tainted_by(),
+                                                    ))
             else:
                 self.logs_to_show_in_comment.append('[%s: %s (%s)]'
                                                     % (
@@ -272,6 +295,7 @@ class TraceAdimeht(TraceTaint):
             else:
                 _src = src_operands[0].get_operand_name()
 
+        self.logs_to_show_in_comment.append('[IR]')
         if len(self.context.current_capstone_instruction.groups) > 0:
             for _g in self.context.current_capstone_instruction.groups:
                 if _g == capstone.x86.X86_GRP_CALL:
@@ -360,7 +384,7 @@ class TraceAdimeht(TraceTaint):
         self.context.set_context_by_x64dbg_trace(x64dbg_trace)
 
         # todo: for debugging begin ##################################
-        if self.context.x64dbg_trace['id'] == 9533:
+        if self.context.x64dbg_trace['id'] == 9933:
             self.api.print(self.context.x64dbg_trace['id'])
         # todo: for debugging end ##################################
 
@@ -388,8 +412,7 @@ class TraceAdimeht(TraceTaint):
 
         # run taint
         _new_x64dbg_trace = self.run_taint_single_line_by_x64dbg_trace(x64dbg_trace)
-        _trace_comment_from_taint = _new_x64dbg_trace['comment']
-
-        _logs_to_show_in_comment.append(_trace_comment_from_taint)
+        if _new_x64dbg_trace['comment'] != '':
+            _logs_to_show_in_comment.append(_new_x64dbg_trace['comment'])
         _new_x64dbg_trace['comment'] = ' | '.join(_logs_to_show_in_comment)
         return _new_x64dbg_trace
