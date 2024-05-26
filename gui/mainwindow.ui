@@ -193,7 +193,7 @@
               <property name="minimumSize">
                <size>
                 <width>240</width>
-                <height>420</height>
+                <height>100</height>
                </size>
               </property>
               <property name="font">
@@ -231,7 +231,36 @@
               <property name="minimumSize">
                <size>
                 <width>240</width>
-                <height>0</height>
+                <height>100</height>
+               </size>
+              </property>
+              <property name="font">
+               <font>
+                <family>Courier</family>
+                <pointsize>8</pointsize>
+               </font>
+              </property>
+              <property name="gridStyle">
+               <enum>Qt::DashLine</enum>
+              </property>
+              <attribute name="horizontalHeaderVisible">
+               <bool>true</bool>
+              </attribute>
+              <attribute name="verticalHeaderVisible">
+               <bool>false</bool>
+              </attribute>
+              <attribute name="verticalHeaderDefaultSectionSize">
+               <number>24</number>
+              </attribute>
+              <attribute name="verticalHeaderMinimumSectionSize">
+               <number>22</number>
+              </attribute>
+             </widget>
+             <widget class="TaintTableWidget" name="taint_table">
+              <property name="minimumSize">
+               <size>
+                <width>240</width>
+                <height>100</height>
                </size>
               </property>
               <property name="font">
@@ -369,6 +398,11 @@
    <class>MemTableWidget</class>
    <extends>QTableWidget</extends>
    <header>gui/widgets/mem_table_widget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>TaintTableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>gui/widgets/taint_table_widget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

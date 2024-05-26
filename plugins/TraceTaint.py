@@ -629,6 +629,7 @@ class TraceTaint:
     #   'opcodes': '680ae70baa',
     #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
     #   'regchanges': 'ebp: 0x4ff8 '
+    #   'taints': [] # list of taints
     # }
     def run_taint_single_line_by_x64dbg_trace(self, x64dbg_trace):
         self.logs_to_show_in_comment = []
@@ -657,4 +658,5 @@ class TraceTaint:
             self.logs_to_show_in_comment.append(_str_every_tainted_operands)
 
         x64dbg_trace['comment'] = ' | '.join(self.logs_to_show_in_comment)
+        x64dbg_trace['taints'] = self.get_tainted_operands()[:]
         return x64dbg_trace

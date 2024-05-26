@@ -147,6 +147,11 @@ class MainWindow(QMainWindow):
         self.mem_table.setHorizontalHeaderLabels(prefs.MEM_LABELS)
         self.mem_table.horizontalHeader().setStretchLastSection(True)
 
+        # Init taint table
+        self.taint_table.setColumnCount(len(prefs.TAINT_LABELS))
+        self.taint_table.setHorizontalHeaderLabels(prefs.TAINT_LABELS)
+        self.taint_table.horizontalHeader().setStretchLastSection(True)
+
         # Init bookmark table
         self.bookmark_table.setColumnCount(len(prefs.BOOKMARK_LABELS))
         self.bookmark_table.setHorizontalHeaderLabels(prefs.BOOKMARK_LABELS)
@@ -314,6 +319,10 @@ class MainWindow(QMainWindow):
         if "mem" in self.trace_data.trace[row_id]:
             mem = self.trace_data.trace[row_id]["mem"]
         self.mem_table.set_data(mem)
+        taints = []
+        if "taints" in self.trace_data.trace[row_id]:
+            taints = self.trace_data.trace[row_id]["taints"]
+        self.taint_table.set_data(taints)
         self.update_status_bar()
 
     def on_filter_btn_clicked(self, filter_text: str):
