@@ -15,10 +15,10 @@ class TraceTaintedOperandForX64DbgTrace(TraceOperandForX64DbgTrace):
         )
 
     def get_tainted_by(self) -> list[str]:
-        return self.tainted_by
+        return self.tainted_by[:]
 
     def get_derived_from(self) -> list[str]:
-        return self.derived_from
+        return self.derived_from[:]
 
     def set_tainted_by(self, tainted_by):
         self.tainted_by = tainted_by

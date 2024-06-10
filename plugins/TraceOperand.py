@@ -86,7 +86,7 @@ class TraceOperandForX64DbgTrace:
         return self.operand_value
 
     def get_memory_formula(self) -> list[str]:
-        return self.memory_formula
+        return self.memory_formula[:]
 
     def get_upper_register(self) -> str:
         return self.upper_register
