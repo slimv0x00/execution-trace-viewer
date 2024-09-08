@@ -27,6 +27,7 @@ class TraceTaint:
     logging_operands_for_instruction: bool = False
     logging_on_adding_and_removing_tainted_operand: bool = False
     logging_detail_of_tainted_operand_on_adding: bool = False
+    logging_on_moving_bbl: bool = False
 
     def __init__(
             self,
@@ -129,6 +130,8 @@ class TraceTaint:
                 # todo list end ##########################
 
                 if _g == capstone.x86.X86_GRP_CALL:
+                    if self.logging_on_moving_bbl:
+                        self.logs_to_show_in_comment.append('[Moving BBL]')
                     _operand_esp = TraceOperandForX64DbgTrace(self.context, None)
                     _operand_esp_value = self.context.get_register_value('esp') - 4
                     _operand_esp.force_set_operand(
@@ -143,11 +146,15 @@ class TraceTaint:
                     _src_operands.append(operands[0])
                     return _dst_operands, _src_operands
                 elif _g == capstone.x86.X86_GRP_JUMP:
+                    if self.logging_on_moving_bbl:
+                        self.logs_to_show_in_comment.append('[Moving BBL]')
                     if len(operands) == 0 or len(operands) > 1:
                         return None, None
                     _src_operands.append(operands[0])
                     return _dst_operands, _src_operands
                 elif _g == capstone.x86.X86_GRP_RET or _g == capstone.x86.X86_GRP_IRET:
+                    if self.logging_on_moving_bbl:
+                        self.logs_to_show_in_comment.append('[Moving BBL]')
                     _operand_esp = TraceOperandForX64DbgTrace(self.context, None)
                     _operand_esp_value = self.context.get_register_value('esp')
                     _operand_esp.force_set_operand(
@@ -241,7 +248,9 @@ class TraceTaint:
                                                               capstone.x86.X86_INS_CMP,
                                                               capstone.x86.X86_INS_SHR, capstone.x86.X86_INS_SHL]:
             _dst_operands.append(operands[0])
-        elif self.context.current_capstone_instruction.id in [capstone.x86.X86_INS_STD]:
+        elif self.context.current_capstone_instruction.id in [capstone.x86.X86_INS_STD, capstone.x86.X86_INS_RDTSC,
+                                                              capstone.x86.X86_INS_PUSHAL, capstone.x86.X86_INS_POPAL]:
+            # todo: PUSHAL and POPAL SHOULD BE HANDLED ANOTHER WAY !!!!!!!!!!!!!!!!!!!!!!!!
             pass
         else:
             raise Exception(
