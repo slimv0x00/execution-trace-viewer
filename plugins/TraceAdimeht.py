@@ -23,7 +23,7 @@ class TraceAdimeht(TraceTaint):
     # ]
     tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = []
 
-    logging_you_are_in_vm: bool = False
+    logging_you_are_in_vm: bool = True
     logging_on_vm_role_identified: bool = False
     logging_on_vr_identified: bool = False
     logging_on_lv_identified: bool = False
@@ -359,6 +359,18 @@ class TraceAdimeht(TraceTaint):
             capstone.x86.X86_INS_DEC,
         ]:
             self.logs_to_show_in_comment.append('DEC %s' % _dst)
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_INC,
+        ]:
+            self.logs_to_show_in_comment.append('INC %s' % _dst)
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_NEG,
+        ]:
+            self.logs_to_show_in_comment.append('NEG %s' % _dst)
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_NOT,
+        ]:
+            self.logs_to_show_in_comment.append('NOT %s' % _dst)
         else:
             raise Exception('[E] Cannot generate pseudo IR : Unhandled instruction')
 
