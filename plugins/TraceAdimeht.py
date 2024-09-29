@@ -23,6 +23,17 @@ class TraceAdimeht(TraceTaint):
     # ]
     tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = []
 
+    vm_enter_begin_trace = None
+    vm_enter_end_trace = None
+    vm_enters: list[dict[str:int]] = []
+    vm_vri_begin_trace = None
+    vm_vri_end_trace = None
+    vm_vris: list[dict[str:int]] = []
+    vm_previous_trace = None
+    vm_exit_step_count: int = 0
+    vm_exit_begin_trace = None
+    vm_exits: list[dict[str:int]] = []
+
     logging_you_are_in_vm: bool = True
     logging_on_vm_role_identified: bool = False
     logging_on_vr_identified: bool = False
@@ -63,6 +74,18 @@ class TraceAdimeht(TraceTaint):
             self.get_reg_vbr_role_name(),
         )
         self.set_reg_vbr_value(vbr_value)
+
+        # Initialize values related to recognizing VM enter and exit
+        self.vm_enter_begin_trace = None
+        self.vm_enter_end_trace = None
+        self.vm_enters = []
+        self.vm_vri_begin_trace = None
+        self.vm_vri_end_trace = None
+        self.vm_vris = []
+        self.vm_previous_trace = None
+        self.vm_exit_step_count = 0
+        self.vm_exit_begin_trace = None
+        self.vm_exits = []
 
     def get_you_are_in_vm(self) -> bool:
         return self.you_are_in_vm
@@ -428,3 +451,157 @@ class TraceAdimeht(TraceTaint):
             _logs_to_show_in_comment.append(_new_x64dbg_trace['comment'])
         _new_x64dbg_trace['comment'] = ' | '.join(_logs_to_show_in_comment)
         return _new_x64dbg_trace
+
+    @staticmethod
+    def get_memory_type_operands_in_vm_area(
+            operands: list[TraceOperandForX64DbgTrace],
+            initial_esp: int,
+            stack_range=0x1000,
+            find_belonging_to_stack=False,
+    ) -> list[TraceOperandForX64DbgTrace]:
+        _result: list[TraceOperandForX64DbgTrace] = []
+        for _operand in operands:
+            if _operand.get_operand_type() != 'mem':
+                continue
+            # look up memory area where it belongs
+            _mem_addr = _operand.get_operand_value()
+            if (_mem_addr >= initial_esp - stack_range) and (_mem_addr < initial_esp + stack_range):
+                # memory address within stack
+                if find_belonging_to_stack is False:
+                    continue
+            else:
+                # memory address within VM area
+                if find_belonging_to_stack is True:
+                    continue
+            _result.append(_operand)
+        return _result
+
+    @staticmethod
+    def is_in_virtualized_instruction_tricky_way(x64dbg_trace, initial_esp, stack_range=0x1000):
+        _taints: list[TraceAdimehtOperandForX64DbgTrace] = x64dbg_trace['taints']
+        _host_map = {
+            'eax': 0,
+            'ebx': 0,
+            'ecx': 0,
+            'edx': 0,
+            'esi': 0,
+            'edi': 0,
+            'ebp': 0,
+        }
+        _vm_map = {
+            'eax': 0,
+            'ebx': 0,
+            'ecx': 0,
+            'edx': 0,
+            'esi': 0,
+            'edi': 0,
+            'ebp': 0,
+        }
+        for _taint in _taints:
+            if _taint.get_operand_type() != 'mem':
+                continue
+            _tainted_by = _taint.get_tainted_by()
+            if len(_tainted_by) != 1:
+                continue
+            _tainted_by_reg = _tainted_by[0]
+            if _tainted_by_reg not in _host_map.keys():
+                continue
+            _mem_addr = _taint.get_operand_value()
+            if (_mem_addr >= initial_esp - stack_range) and (_mem_addr < initial_esp + stack_range):
+                # memory address within stack
+                _host_map[_tainted_by_reg] += 1
+            else:
+                # memory address within virtual machine
+                _vm_map[_tainted_by_reg] += 1
+        for _register in _host_map.keys():
+            if (_host_map[_register] == 0) and (_vm_map[_register] > 0):
+                return True
+        return False
+
+    def is_in_vm_exit(
+            self,
+            dst_operands: list[TraceOperandForX64DbgTrace],
+            src_operands: list[TraceOperandForX64DbgTrace],
+            initial_esp: int,
+    ):
+        if self.context.current_capstone_instruction.id not in [
+            capstone.x86.X86_INS_PUSH,
+        ]:
+            return False
+        if len(dst_operands) != 1 and len(src_operands) != 1:
+            print('[E] Invalid operands found while checking whether you are in VM exit')
+            print(' - %d : 0x%x : %s (dst: %s, src: %s)' % (
+                self.context.x64dbg_trace['id'],
+                self.context.x64dbg_trace['ip'],
+                self.context.x64dbg_trace['disasm'],
+                ', '.join([_op.get_operand_name() for _op in dst_operands]),
+                ', '.join([_op.get_operand_name() for _op in src_operands]),
+            ))
+            return False
+        _dst_operands_in_stack = self.get_memory_type_operands_in_vm_area(
+            dst_operands,
+            initial_esp,
+            find_belonging_to_stack=True,
+        )
+        if len(_dst_operands_in_stack) == 0:
+            return False
+        _src_operands_in_vm = self.get_memory_type_operands_in_vm_area(
+            src_operands,
+            initial_esp,
+            find_belonging_to_stack=False,
+        )
+        if len(_src_operands_in_vm) == 0:
+            return False
+        return True
+
+    def run_recognizing_vm_enter_and_exit(self, x64dbg_trace, initial_esp: int):
+        self.logs_to_show_in_comment = []
+        self.context.set_context_by_x64dbg_trace(x64dbg_trace)
+
+        _comment = x64dbg_trace['comment']
+        if _comment.find('VR') == -1:
+            return x64dbg_trace
+        # Current instruction is Virtual Register related Instruction (VRI)
+
+        _in_virtualized_instruction = self.is_in_virtualized_instruction_tricky_way(x64dbg_trace, initial_esp)
+        if _in_virtualized_instruction is False:
+            if self.vm_enter_begin_trace is None:
+                self.vm_enter_begin_trace = x64dbg_trace
+            else:
+                self.vm_enter_end_trace = x64dbg_trace
+        else:
+            if self.vm_enter_begin_trace is not None:
+                self.vm_enters.append({
+                    'begin': self.vm_enter_begin_trace['id'],
+                    'end': self.vm_enter_end_trace['id']
+                })
+                self.vm_enter_begin_trace = None
+                self.vm_enter_end_trace = None
+                self.vm_vri_begin_trace = x64dbg_trace
+
+        _dst_operands: list[TraceOperandForX64DbgTrace] | None = None
+        _src_operands: list[TraceOperandForX64DbgTrace] | None = None
+        _dst_operands, _src_operands = self.retrieve_dst_and_src_operands(x64dbg_trace)
+        _is_in_vm_exit = self.is_in_vm_exit(_dst_operands, _src_operands, initial_esp)
+        if _is_in_vm_exit is True:
+            self.vm_exit_step_count += 1
+            if self.vm_exit_step_count == 1:
+                self.vm_exit_begin_trace = x64dbg_trace
+                self.vm_vri_end_trace = self.vm_previous_trace
+            elif self.vm_exit_step_count == 8:
+                self.vm_exits.append({
+                    'begin': self.vm_exit_begin_trace['id'],
+                    'end': x64dbg_trace['id'],
+                })
+                self.vm_vris.append({
+                    'begin': self.vm_vri_begin_trace['id'],
+                    'end': self.vm_vri_end_trace['id'],
+                })
+        else:
+            if self.vm_exit_step_count < 8:
+                self.vm_exit_begin_trace = None
+            self.vm_exit_step_count = 0
+
+        self.vm_previous_trace = x64dbg_trace
+        x64dbg_trace['comment'] = _comment
+        return x64dbg_trace

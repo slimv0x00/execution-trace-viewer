@@ -76,6 +76,7 @@ class PluginMvAdimeht(IPlugin):
     ):
         _vbr_canditates = {}
         _args = []
+        _initial_esp = None
         for _x64dbg_trace in x64dbg_traces:
             try:
                 # _trace
@@ -96,11 +97,11 @@ class PluginMvAdimeht(IPlugin):
                     continue
                 self.context.set_context_by_x64dbg_trace(_x64dbg_trace)
                 if _index == target_index:
-                    _esp = self.context.get_register_value('esp')
+                    _initial_esp = self.context.get_register_value('esp')
                     for _i_arg in range(number_of_arg):
                         _args.append({
                             'arg_id': 'arg_%d' % (_i_arg + 1),
-                            'arg_addr': _esp + (_i_arg * int_size),
+                            'arg_addr': _initial_esp + (_i_arg * int_size),
                         })
                 _ebp = self.context.get_register_value('ebp')
                 if _ebp not in _vbr_canditates:
@@ -146,9 +147,10 @@ class PluginMvAdimeht(IPlugin):
             'args': _args,
             'vbr': _vbr,
             'vbr_candidates': _vbr_canditates,
+            'initial_esp': _initial_esp,
         }
 
-    def get_initial_tainted_operands(self, x64dbg_trace, args):
+    def get_initial_tainted_operands(self, x64dbg_trace, args) -> list[TraceAdimehtOperandForX64DbgTrace]:
         _result = self.get_registers_as_tainted_operand_list(x64dbg_trace)
         for _arg in args:
             _arg_id = _arg['arg_id']
@@ -164,6 +166,143 @@ class PluginMvAdimeht(IPlugin):
             )
             _result.append(_trace_adimeht_arg)
         return _result
+
+    def run_stage_1(
+            self,
+            x64dbg_traces,
+            address_boundary_to_trace_begin,
+            address_boundary_to_trace_end,
+            target_index,
+            ttl,
+            args,
+            debug_index=None,
+    ):
+        _result_x64dbg_traces = []
+        for _x64dbg_trace in x64dbg_traces:
+            try:
+                # _trace
+                # {
+                #   'id': 0,
+                #   'ip': 4242012,
+                #   'disasm': 'push 0xaa0be70a',
+                #   'comment': 'push encrypted vm_eip',
+                #   'regs': [3806, 309, 326, 292, 0, 20476, 360, 377, 4242012, 0],
+                #   'opcodes': '680ae70baa',
+                #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
+                #   'regchanges': 'ebp: 0x4ff8 '
+                # }
+                _index = _x64dbg_trace['id']
+                if ttl >= 0:
+                    if _index > ttl:
+                        break
+                _eip = _x64dbg_trace['ip']
+                # skip tracing when EIP is outside the boundary to trace
+                if _eip < address_boundary_to_trace_begin or _eip >= address_boundary_to_trace_end:
+                    continue
+
+                if _index == target_index:
+                    _initial_tainted_operands = self.get_initial_tainted_operands(_x64dbg_trace, args)
+                    self.adimehtModule.set_tainted_operands(_initial_tainted_operands[:])
+                    self.taintModule.set_tainted_operands(_initial_tainted_operands[:])
+                    self.api.print('[+] Initial tainted operands are set : ')
+                    [self.api.print(str(_op)) for _op in self.adimehtModule.tainted_operands]
+
+                # todo: for debugging begin ##################################
+                if self.context.x64dbg_trace['id'] == debug_index:
+                    self.api.print(self.context.x64dbg_trace['id'])
+                # todo: for debugging end ##################################
+
+                _new_trace_taint = self.taintModule.run_taint_single_line_by_x64dbg_trace(_x64dbg_trace.copy())
+                if _new_trace_taint is None:
+                    _result_x64dbg_traces.append(_x64dbg_trace.copy())
+                    break
+                _new_trace_adimeht = self.adimehtModule.run_adimeht_single_line_by_x64dbg_trace(_x64dbg_trace.copy())
+                if _new_trace_adimeht is None:
+                    _result_x64dbg_traces.append(_x64dbg_trace.copy())
+                    break
+                _comments = []
+                if _new_trace_adimeht['comment'] != '':
+                    _comments.append(_new_trace_adimeht['comment'])
+                if _new_trace_taint['comment'] != '':
+                    _comments.append(_new_trace_taint['comment'])
+                _x64dbg_trace['comment'] = ' | '.join(_comments)
+                _x64dbg_trace['taints'] = _new_trace_taint['taints']
+                _result_x64dbg_traces.append(_x64dbg_trace)
+            except Exception as e:
+                _result_x64dbg_traces.append(_x64dbg_trace.copy())
+                print(traceback.format_exc())
+                print(e)
+                print(_x64dbg_trace)
+                break
+        return _result_x64dbg_traces
+
+    def run_stage_2(self, x64dbg_traces, initial_esp):
+        _result_x64dbg_traces = []
+        for _x64dbg_trace in x64dbg_traces:
+            try:
+                # _trace
+                # {
+                #   'id': 0,
+                #   'ip': 4242012,
+                #   'disasm': 'push 0xaa0be70a',
+                #   'comment': 'push encrypted vm_eip',
+                #   'regs': [3806, 309, 326, 292, 0, 20476, 360, 377, 4242012, 0],
+                #   'opcodes': '680ae70baa',
+                #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
+                #   'regchanges': 'ebp: 0x4ff8 ',
+                #   'taints': tainted_operands,
+                # }
+                _new_trace_adimeht = self.adimehtModule.run_recognizing_vm_enter_and_exit(_x64dbg_trace, initial_esp)
+                if _new_trace_adimeht is None:
+                    _result_x64dbg_traces.append(_x64dbg_trace.copy())
+                    break
+                _comments = []
+                if _new_trace_adimeht['comment'] != '':
+                    _comments.append(_new_trace_adimeht['comment'])
+                _x64dbg_trace['comment'] = ' | '.join(_comments)
+                _result_x64dbg_traces.append(_x64dbg_trace)
+            except Exception as e:
+                _result_x64dbg_traces.append(_x64dbg_trace.copy())
+                print(traceback.format_exc())
+                print(e)
+                print(_x64dbg_trace)
+                break
+        return _result_x64dbg_traces
+
+    def run_stage_3(self, x64dbg_traces):
+        _result_x64dbg_traces = []
+        for _x64dbg_trace in x64dbg_traces:
+            try:
+                # _trace
+                # {
+                #   'id': 0,
+                #   'ip': 4242012,
+                #   'disasm': 'push 0xaa0be70a',
+                #   'comment': 'push encrypted vm_eip',
+                #   'regs': [3806, 309, 326, 292, 0, 20476, 360, 377, 4242012, 0],
+                #   'opcodes': '680ae70baa',
+                #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
+                #   'regchanges': 'ebp: 0x4ff8 ',
+                #   'taints': tainted_operands,
+                # }
+                _index = _x64dbg_trace['id']
+                _is_in_virtualized_instruction = False
+                for _vm_vri in self.adimehtModule.vm_vris:
+                    if _vm_vri['begin'] <= _index <= _vm_vri['end']:
+                        _is_in_virtualized_instruction = True
+                if _is_in_virtualized_instruction is True:
+                    _comment = _x64dbg_trace['comment']
+                    if (_comment.find('VR') != -1) or (_comment.find('VB') != -1):
+                        _comment = '[VI] ' + _comment
+                    _x64dbg_trace['comment'] = _comment
+                    _result_x64dbg_traces.append(_x64dbg_trace)
+            except Exception as e:
+                _result_x64dbg_traces.append(_x64dbg_trace.copy())
+                print(traceback.format_exc())
+                print(e)
+                print(_x64dbg_trace)
+                break
+        return _result_x64dbg_traces
 
     def execute(self, api: Api):
         self.api = api
@@ -181,9 +320,9 @@ class PluginMvAdimeht(IPlugin):
         _options = self.api.get_values_from_user("Filter by memory address", _input_dlg_data)
         if not _options:
             return
-        _str_address_boundary_to_trace_begin,\
-            _str_address_boundary_to_trace_end,\
-            _target_index,\
+        _str_address_boundary_to_trace_begin, \
+            _str_address_boundary_to_trace_end, \
+            _target_index, \
             _vbr, \
             _number_of_arg, \
             _ttl = _options
@@ -202,6 +341,9 @@ class PluginMvAdimeht(IPlugin):
         )
         _vbr = _arg_and_vbr['vbr']
         _args = _arg_and_vbr['args']
+        _initial_esp = _arg_and_vbr['initial_esp']
+        print('[+] VBR : 0x%x' % _vbr)
+        print('[+] Initial ESP : 0x%x' % _initial_esp)
 
         self.adimehtModule = TraceAdimeht(
             api,
@@ -225,65 +367,41 @@ class PluginMvAdimeht(IPlugin):
         self.api.print('[+] Run taint analysis')
         self.api.print(' - Address boundary to trace : 0x%08x ~ 0x%08x'
                        % (_address_boundary_to_trace_begin, _address_boundary_to_trace_end))
-        _traces_to_show = []
-        for _x64dbg_trace in _x64dbg_traces:
-            try:
-                # _trace
-                # {
-                #   'id': 0,
-                #   'ip': 4242012,
-                #   'disasm': 'push 0xaa0be70a',
-                #   'comment': 'push encrypted vm_eip',
-                #   'regs': [3806, 309, 326, 292, 0, 20476, 360, 377, 4242012, 0],
-                #   'opcodes': '680ae70baa',
-                #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
-                #   'regchanges': 'ebp: 0x4ff8 '
-                # }
-                _index = _x64dbg_trace['id']
-                if _ttl >= 0:
-                    if _index > _ttl:
-                        break
-                _eip = _x64dbg_trace['ip']
-                # skip tracing when EIP is outside the boundary to trace
-                if _eip < _address_boundary_to_trace_begin or _eip >= _address_boundary_to_trace_end:
-                    continue
+        _traces_to_show = _x64dbg_traces
+        _stage1_traces = []
+        _stage2_traces = []
+        _stage1_traces = self.run_stage_1(
+            _x64dbg_traces,
+            _address_boundary_to_trace_begin,
+            _address_boundary_to_trace_end,
+            _target_index,
+            _ttl,
+            _args,
+            debug_index=9933,
+        )
+        if len(_stage1_traces) > 0:
+            print('[+] Stage 1 : Length of filtered trace: %d' % len(_stage1_traces))
+            _traces_to_show = _stage1_traces
+        _stage2_traces = self.run_stage_2(_stage1_traces, _initial_esp)
+        if len(_stage2_traces) > 0:
+            print('[+] Stage 2 : Length of filtered trace: %d' % len(_stage2_traces))
+            [
+                print(' - VM enter index : %d ~ %d' % (_vm_enter['begin'], _vm_enter['end']))
+                for _vm_enter in self.adimehtModule.vm_enters
+            ]
+            [
+                print(' - VM virtualized instruction index : %d ~ %d' % (_vm_vri['begin'], _vm_vri['end']))
+                for _vm_vri in self.adimehtModule.vm_vris
+            ]
+            [
+                print(' - VM exit index : %d ~ %d' % (_vm_exit['begin'], _vm_exit['end']))
+                for _vm_exit in self.adimehtModule.vm_exits
+            ]
+            _traces_to_show = _stage2_traces
+        _stage3_traces = self.run_stage_3(_stage2_traces)
+        if len(_stage3_traces) > 0:
+            print('[+] Stage 3 : Length of filtered trace: %d' % len(_stage3_traces))
+            _traces_to_show = _stage3_traces
 
-                if _index == _target_index:
-                    _initial_tainted_operands = self.get_initial_tainted_operands(_x64dbg_trace, _args)
-                    self.adimehtModule.set_tainted_operands(_initial_tainted_operands[:])
-                    self.taintModule.set_tainted_operands(_initial_tainted_operands[:])
-                    self.api.print('[+] Initial tainted operands are set : ')
-                    [self.api.print(str(_op)) for _op in self.adimehtModule.tainted_operands]
-
-                # todo: for debugging begin ##################################
-                if self.context.x64dbg_trace['id'] == 9933:
-                    self.api.print(self.context.x64dbg_trace['id'])
-                # todo: for debugging end ##################################
-
-                _new_trace_taint = self.taintModule.run_taint_single_line_by_x64dbg_trace(_x64dbg_trace.copy())
-                if _new_trace_taint is None:
-                    _traces_to_show.append(_x64dbg_trace.copy())
-                    break
-                _new_trace_adimeht = self.adimehtModule.run_adimeht_single_line_by_x64dbg_trace(_x64dbg_trace.copy())
-                if _new_trace_adimeht is None:
-                    _traces_to_show.append(_x64dbg_trace.copy())
-                    break
-                _comments = []
-                if _new_trace_adimeht['comment'] != '':
-                    _comments.append(_new_trace_adimeht['comment'])
-                if _new_trace_taint['comment'] != '':
-                    _comments.append(_new_trace_taint['comment'])
-                _x64dbg_trace['comment'] = ' | '.join(_comments)
-                _x64dbg_trace['taints'] = _new_trace_taint['taints']
-                _traces_to_show.append(_x64dbg_trace)
-            except Exception as e:
-                _traces_to_show.append(_x64dbg_trace.copy())
-                print(traceback.format_exc())
-                print(e)
-                print(_x64dbg_trace)
-                break
-
-        if len(_traces_to_show) > 0:
-            print('Length of filtered trace: %d' % len(_traces_to_show))
-            self.api.set_filtered_trace(_traces_to_show)
-            self.api.show_filtered_trace()
+        self.api.set_filtered_trace(_traces_to_show)
+        self.api.show_filtered_trace()

@@ -27,7 +27,7 @@ class TraceTaint:
     logging_operands_for_instruction: bool = False
     logging_on_adding_and_removing_tainted_operand: bool = False
     logging_detail_of_tainted_operand_on_adding: bool = False
-    logging_on_moving_bbl: bool = False
+    logging_on_moving_bbl: bool = True
 
     def __init__(
             self,
@@ -315,6 +315,36 @@ class TraceTaint:
             return None
         return _result[0]
 
+    def retrieve_same_operand_from_operands(
+            self,
+            operand: TraceOperandForX64DbgTrace | TraceTaintedOperandForX64DbgTrace,
+            operands: list[TraceTaintedOperandForX64DbgTrace],
+    ) -> TraceTaintedOperandForX64DbgTrace | None:
+        _result: list[TraceTaintedOperandForX64DbgTrace] = []
+        _operand_type = operand.get_operand_type()
+        _operand_name = operand.get_operand_name()
+
+        # to handle of 8-bit and 16-bit registers
+        if _operand_type == 'reg':
+            _operand_name = operand.get_upper_register()
+
+        _operand = TraceOperandForX64DbgTrace(self.context, None)
+        _operand.force_set_operand(
+            _operand_type,
+            _operand_name,
+            operand.get_operand_value(),
+            operand.get_memory_formula(),
+        )
+        for _input_operand in operands:
+            if _input_operand.is_same_operand(_operand):
+                _result.append(_input_operand)
+        if len(_result) > 1:
+            raise Exception('[E] Detected more than one tainted operand for %s\n- %s'
+                            % (_operand_name, str([_op.get_operand_name() for _op in _result])))
+        elif len(_result) == 0:
+            return None
+        return _result[0]
+
     def retrieve_operands_from_input_operand_memory_formulas(
             self,
             operand: TraceOperandForX64DbgTrace
@@ -373,6 +403,41 @@ class TraceTaint:
             _derived_from: list[str] = self.retrieve_derived_from_string_from_input_operand_memory_formulas(_operand)
             _new_tainted_operand.set_derived_from(_derived_from)
             _result.append(_new_tainted_operand)
+        return _result
+
+    @staticmethod
+    def retrieve_intersection_operands_from_two_operands(
+            operands_1: list[TraceTaintedOperandForX64DbgTrace],
+            operands_2: list[TraceTaintedOperandForX64DbgTrace],
+    ) -> list[TraceTaintedOperandForX64DbgTrace]:
+        _result: list[TraceTaintedOperandForX64DbgTrace] = []
+        for _operand_1 in operands_1:
+            for _operand_2 in operands_2:
+                if _operand_1.is_same_operand(_operand_2):
+                    _result.append(_operand_1)
+        return _result
+
+    @staticmethod
+    def retrieve_difference_of_operands_from_two_operands(
+            operands_1: list[TraceTaintedOperandForX64DbgTrace],
+            operands_2: list[TraceTaintedOperandForX64DbgTrace],
+    ) -> list[TraceTaintedOperandForX64DbgTrace]:
+        _result: list[TraceTaintedOperandForX64DbgTrace] = []
+        _intersection_operands = TraceTaint.retrieve_intersection_operands_from_two_operands(operands_1, operands_2)
+        for _operand_1 in operands_1:
+            _is_in_intersection = False
+            for _intersection_operand in _intersection_operands:
+                if _operand_1.is_same_operand(_intersection_operand):
+                    _is_in_intersection = True
+            if _is_in_intersection is False:
+                _result.append(_operand_1)
+        for _operand_2 in operands_2:
+            _is_in_intersection = False
+            for _intersection_operand in _intersection_operands:
+                if _operand_2.is_same_operand(_intersection_operand):
+                    _is_in_intersection = True
+            if _is_in_intersection is False:
+                _result.append(_operand_2)
         return _result
 
     @staticmethod
