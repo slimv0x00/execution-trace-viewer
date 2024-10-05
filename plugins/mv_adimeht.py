@@ -175,6 +175,7 @@ class PluginMvAdimeht(IPlugin):
             target_index,
             ttl,
             args,
+            initial_esp: int,
             debug_index=None,
     ):
         _result_x64dbg_traces = []
@@ -216,7 +217,10 @@ class PluginMvAdimeht(IPlugin):
                 if _new_trace_taint is None:
                     _result_x64dbg_traces.append(_x64dbg_trace.copy())
                     break
-                _new_trace_adimeht = self.adimehtModule.run_adimeht_single_line_by_x64dbg_trace(_x64dbg_trace.copy())
+                _new_trace_adimeht = self.adimehtModule.run_adimeht_single_line_by_x64dbg_trace(
+                    _x64dbg_trace.copy(),
+                    initial_esp,
+                )
                 if _new_trace_adimeht is None:
                     _result_x64dbg_traces.append(_x64dbg_trace.copy())
                     break
@@ -251,6 +255,7 @@ class PluginMvAdimeht(IPlugin):
                 #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
                 #   'regchanges': 'ebp: 0x4ff8 ',
                 #   'taints': tainted_operands,
+                #   'irs': intermediate representation list,
                 # }
                 _new_trace_adimeht = self.adimehtModule.run_recognizing_vm_enter_and_exit(_x64dbg_trace, initial_esp)
                 if _new_trace_adimeht is None:
@@ -284,18 +289,25 @@ class PluginMvAdimeht(IPlugin):
                 #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
                 #   'regchanges': 'ebp: 0x4ff8 ',
                 #   'taints': tainted_operands,
+                #   'irs': intermediate representation list,
                 # }
                 _index = _x64dbg_trace['id']
+                _comment = _x64dbg_trace['comment']
                 _is_in_virtualized_instruction = False
+
+                if _comment.find('IR') != -1:
+                    _comment = '[VMI] ' + _comment
+                if _comment.find('VR') != -1:
+                    _comment = '[VRI] ' + _comment
+
                 for _vm_vri in self.adimehtModule.vm_vris:
                     if _vm_vri['begin'] <= _index <= _vm_vri['end']:
                         _is_in_virtualized_instruction = True
                 if _is_in_virtualized_instruction is True:
-                    _comment = _x64dbg_trace['comment']
                     if (_comment.find('VR') != -1) or (_comment.find('VB') != -1):
                         _comment = '[VI] ' + _comment
-                    _x64dbg_trace['comment'] = _comment
-                    _result_x64dbg_traces.append(_x64dbg_trace)
+                _x64dbg_trace['comment'] = _comment
+                _result_x64dbg_traces.append(_x64dbg_trace)
             except Exception as e:
                 _result_x64dbg_traces.append(_x64dbg_trace.copy())
                 print(traceback.format_exc())
@@ -370,6 +382,8 @@ class PluginMvAdimeht(IPlugin):
         _traces_to_show = _x64dbg_traces
         _stage1_traces = []
         _stage2_traces = []
+        _stage3_traces = []
+        print('[+] Run stage 1 : Analyzing internal structure')
         _stage1_traces = self.run_stage_1(
             _x64dbg_traces,
             _address_boundary_to_trace_begin,
@@ -377,14 +391,16 @@ class PluginMvAdimeht(IPlugin):
             _target_index,
             _ttl,
             _args,
+            _initial_esp,
             debug_index=9933,
         )
         if len(_stage1_traces) > 0:
-            print('[+] Stage 1 : Length of filtered trace: %d' % len(_stage1_traces))
+            print(' - Length of filtered trace: %d' % len(_stage1_traces))
             _traces_to_show = _stage1_traces
+        print('[+] Run stage 2 : Recognizing VM enter and exit')
         _stage2_traces = self.run_stage_2(_stage1_traces, _initial_esp)
         if len(_stage2_traces) > 0:
-            print('[+] Stage 2 : Length of filtered trace: %d' % len(_stage2_traces))
+            print(' - Length of filtered trace: %d' % len(_stage2_traces))
             [
                 print(' - VM enter index : %d ~ %d' % (_vm_enter['begin'], _vm_enter['end']))
                 for _vm_enter in self.adimehtModule.vm_enters
@@ -398,9 +414,10 @@ class PluginMvAdimeht(IPlugin):
                 for _vm_exit in self.adimehtModule.vm_exits
             ]
             _traces_to_show = _stage2_traces
+        print('[+] Run stage 3 : Identifying virtual instruction')
         _stage3_traces = self.run_stage_3(_stage2_traces)
         if len(_stage3_traces) > 0:
-            print('[+] Stage 3 : Length of filtered trace: %d' % len(_stage3_traces))
+            print(' - Length of filtered trace: %d' % len(_stage3_traces))
             _traces_to_show = _stage3_traces
 
         self.api.set_filtered_trace(_traces_to_show)

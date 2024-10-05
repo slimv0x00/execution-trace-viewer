@@ -144,6 +144,8 @@ class TraceAdimeht(TraceTaint):
     def identify_the_role_of_vm_part_for_operand(
             self,
             operand: TraceOperandForX64DbgTrace,
+            initial_esp: int,
+            stack_range: int = 0x1000,
     ):
         _identified_role = None
         _tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = self.get_tainted_operands()
@@ -156,6 +158,12 @@ class TraceAdimeht(TraceTaint):
             _vr_list = self.get_vm_part_from_tainted_by_for_operand(_tainted_operand, 'VR')
             if self.reg_vbr_name_for_tainted_by in _tainted_by_for_tainted_operand:
                 if len(_vb_list) > 0:
+                    if operand.get_operand_type() == 'mem':
+                        _mem_addr = operand.get_operand_value()
+                        if (_mem_addr >= initial_esp - stack_range) and (_mem_addr < initial_esp + stack_range):
+                            # memory address within stack
+                            _identified_role = 'LV'
+                            continue
                     # on VR(Virtual Register)
                     _identified_role = 'VR'
                 elif len(_vb_list) == 0 and len(_vr_list) == 0:
@@ -231,6 +239,7 @@ class TraceAdimeht(TraceTaint):
     def identify_the_role_of_vm_part_for_operands(
             self,
             operands: list[TraceOperandForX64DbgTrace],
+            initial_esp: int,
             from_memory_formula: bool = False,
     ):
         for _operand in operands:
@@ -238,9 +247,9 @@ class TraceAdimeht(TraceTaint):
                 _memory_variables: list[TraceOperandForX64DbgTrace] = \
                     self.retrieve_operands_from_input_operand_memory_formulas(_operand)
                 for _memory_variable in _memory_variables:
-                    self.identify_the_role_of_vm_part_for_operand(_memory_variable)
+                    self.identify_the_role_of_vm_part_for_operand(_memory_variable, initial_esp)
             else:
-                self.identify_the_role_of_vm_part_for_operand(_operand)
+                self.identify_the_role_of_vm_part_for_operand(_operand, initial_esp)
 
     def resolve_operands_to_adimeht_operands(self, operands: list[TraceOperandForX64DbgTrace])\
             -> list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace]:
@@ -296,7 +305,9 @@ class TraceAdimeht(TraceTaint):
             self,
             dst_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
             src_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
-    ):
+            logging_pseudo_ir: bool = False,
+    ) -> list[str]:
+        _irs = []
         if len(dst_operands) > 1 or len(src_operands) > 1:
             raise Exception('[E] Cannot generate pseudo IR : Too many operand\n - Dst : %s\n - Src : %s'
                             % (dst_operands, src_operands))
@@ -318,18 +329,25 @@ class TraceAdimeht(TraceTaint):
             else:
                 _src = src_operands[0].get_operand_name()
 
-        self.logs_to_show_in_comment.append('[IR]')
+        if logging_pseudo_ir is True:
+            self.logs_to_show_in_comment.append('[IR]')
         if len(self.context.current_capstone_instruction.groups) > 0:
             for _g in self.context.current_capstone_instruction.groups:
                 if _g == capstone.x86.X86_GRP_CALL:
-                    self.logs_to_show_in_comment.append('CALL %s' % _src)
-                    return
+                    _irs.append('CALL %s' % _src)
+                    if logging_pseudo_ir is True:
+                        self.logs_to_show_in_comment.append(_irs[0])
+                    return _irs
                 elif _g == capstone.x86.X86_GRP_JUMP:
-                    self.logs_to_show_in_comment.append('JMP %s' % _src)
-                    return
+                    _irs.append('JMP %s' % _src)
+                    if logging_pseudo_ir is True:
+                        self.logs_to_show_in_comment.append(_irs[0])
+                    return _irs
                 elif _g == capstone.x86.X86_GRP_RET or _g == capstone.x86.X86_GRP_IRET:
-                    self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
-                    return
+                    _irs.append(self.context.x64dbg_trace['disasm'])
+                    if logging_pseudo_ir is True:
+                        self.logs_to_show_in_comment.append(_irs[0])
+                    return _irs
 
         if self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_MOV,
@@ -338,83 +356,98 @@ class TraceAdimeht(TraceTaint):
             capstone.x86.X86_INS_POP,
             capstone.x86.X86_INS_POPFD,
         ]:
-            self.logs_to_show_in_comment.append('MOV %s, %s' % (_dst, _src))
+            _irs.append('MOV %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_MOVZX,
         ]:
-            self.logs_to_show_in_comment.append('MOVZX %s, %s' % (_dst, _src))
+            _irs.append('MOVZX %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_ADD,
         ]:
-            self.logs_to_show_in_comment.append('ADD %s, %s' % (_dst, _src))
+            _irs.append('ADD %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_SUB,
         ]:
-            self.logs_to_show_in_comment.append('SUB %s, %s' % (_dst, _src))
+            _irs.append('SUB %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_XCHG,
         ]:
-            # self.logs_to_show_in_comment.append('XCHG %s, %s' % (_dst, _src))
-            self.logs_to_show_in_comment.append('MOV %%tmp, %s' % _src)
-            self.logs_to_show_in_comment.append('MOV %s, %s' % (_src, _dst))
-            self.logs_to_show_in_comment.append('MOV %s, %%tmp' % _dst)
+            # _irs.append('XCHG %s, %s' % (_dst, _src))
+            _irs.append('MOV %%tmp, %s' % _src)
+            _irs.append('MOV %s, %s' % (_src, _dst))
+            _irs.append('MOV %s, %%tmp' % _dst)
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_CMPXCHG,
         ]:
-            self.logs_to_show_in_comment.append('CMPXCHG %s, %s' % (_dst, _src))
+            _irs.append('CMPXCHG %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_AND,
         ]:
-            self.logs_to_show_in_comment.append('AND %s, %s' % (_dst, _src))
+            _irs.append('AND %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_OR,
         ]:
-            self.logs_to_show_in_comment.append('OR %s, %s' % (_dst, _src))
+            _irs.append('OR %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_XOR,
         ]:
-            self.logs_to_show_in_comment.append('XOR %s, %s' % (_dst, _src))
+            _irs.append('XOR %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_CMP,
         ]:
-            self.logs_to_show_in_comment.append('CMP %s, %s' % (_dst, _src))
+            _irs.append('CMP %s, %s' % (_dst, _src))
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_DEC,
         ]:
-            self.logs_to_show_in_comment.append('DEC %s' % _dst)
+            _irs.append('DEC %s' % _dst)
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_INC,
         ]:
-            self.logs_to_show_in_comment.append('INC %s' % _dst)
+            _irs.append('INC %s' % _dst)
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_NEG,
         ]:
-            self.logs_to_show_in_comment.append('NEG %s' % _dst)
+            _irs.append('NEG %s' % _dst)
         elif self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_NOT,
         ]:
-            self.logs_to_show_in_comment.append('NOT %s' % _dst)
+            _irs.append('NOT %s' % _dst)
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_SHL,
+        ]:
+            _irs.append('SHL %s' % _dst)
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_SHR,
+        ]:
+            _irs.append('SHR %s' % _dst)
+        elif self.context.current_capstone_instruction.id in [
+            capstone.x86.X86_INS_TEST,
+        ]:
+            _irs.append('TEST %s' % _dst)
         else:
             raise Exception('[E] Cannot generate pseudo IR : Unhandled instruction')
+        if logging_pseudo_ir is True:
+            [self.logs_to_show_in_comment.append(_ir) for _ir in _irs]
+        return _irs
 
     def generate_pseudo_ir_by_using_vr_related_instruction(
             self,
             dst_operands: list[TraceOperandForX64DbgTrace],
             src_operands: list[TraceOperandForX64DbgTrace],
-    ):
+    ) -> list[str]:
         _dst_adimeht_operands = self.resolve_operands_to_adimeht_operands(dst_operands)
         _src_adimeht_operands = self.resolve_operands_to_adimeht_operands(src_operands)
         _dst_should_be_converted = self.operands_contains_operand_for_pseudo_ir(_dst_adimeht_operands)
         _src_should_be_converted = self.operands_contains_operand_for_pseudo_ir(_src_adimeht_operands)
         if _dst_should_be_converted is False and _src_should_be_converted is False:
-            return
-        if self.logging_pseudo_ir:
-            self.generate_pseudo_ir(_dst_adimeht_operands, _src_adimeht_operands)
+            return []
+        _irs = self.generate_pseudo_ir(_dst_adimeht_operands, _src_adimeht_operands, self.logging_pseudo_ir)
         if self.logging_pseudo_ir_operands:
             self.print_pseudo_ir_related_operands(_dst_adimeht_operands, 'dst')
             self.print_pseudo_ir_related_operands(_src_adimeht_operands, 'src')
+        return _irs
 
-    def run_adimeht_single_line_by_x64dbg_trace(self, x64dbg_trace):
+    def run_adimeht_single_line_by_x64dbg_trace(self, x64dbg_trace, initial_esp):
         self.logs_to_show_in_comment = []
         self.context.set_context_by_x64dbg_trace(x64dbg_trace)
 
@@ -432,15 +465,19 @@ class TraceAdimeht(TraceTaint):
         _src_operands: list[TraceOperandForX64DbgTrace] | None = None
         _dst_operands, _src_operands = self.retrieve_dst_and_src_operands(x64dbg_trace)
 
-        self.identify_the_role_of_vm_part_for_operands(_dst_operands)
+        self.identify_the_role_of_vm_part_for_operands(_dst_operands, initial_esp)
         _from_memory_formula = False  # will be set as True when it's LEA
         if self.context.current_capstone_instruction.id in [
             capstone.x86.X86_INS_LEA,
         ]:
             _from_memory_formula = True
-        self.identify_the_role_of_vm_part_for_operands(_src_operands, from_memory_formula=_from_memory_formula)
+        self.identify_the_role_of_vm_part_for_operands(
+            _src_operands,
+            initial_esp,
+            from_memory_formula=_from_memory_formula,
+        )
 
-        self.generate_pseudo_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
+        _irs = self.generate_pseudo_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
 
         # back up logs
         _logs_to_show_in_comment = self.logs_to_show_in_comment
@@ -450,6 +487,7 @@ class TraceAdimeht(TraceTaint):
         if _new_x64dbg_trace['comment'] != '':
             _logs_to_show_in_comment.append(_new_x64dbg_trace['comment'])
         _new_x64dbg_trace['comment'] = ' | '.join(_logs_to_show_in_comment)
+        _new_x64dbg_trace['irs'] = _irs
         return _new_x64dbg_trace
 
     @staticmethod
@@ -477,7 +515,7 @@ class TraceAdimeht(TraceTaint):
         return _result
 
     @staticmethod
-    def is_in_virtualized_instruction_tricky_way(x64dbg_trace, initial_esp, stack_range=0x1000):
+    def is_in_virtualized_instruction_tricky_way_1(x64dbg_trace, initial_esp, stack_range=0x1000):
         _taints: list[TraceAdimehtOperandForX64DbgTrace] = x64dbg_trace['taints']
         _host_map = {
             'eax': 0,
@@ -517,6 +555,18 @@ class TraceAdimeht(TraceTaint):
             if (_host_map[_register] == 0) and (_vm_map[_register] > 0):
                 return True
         return False
+
+    initial_vsp = None
+
+    def is_in_virtualized_instruction_tricky_way_2(self, x64dbg_trace, initial_esp, stack_range=0x1000):
+        _esp = self.context.get_register_value('esp')
+        if self.initial_vsp is None:
+            self.initial_vsp = _esp
+            print('[+] Initial VSP : 0x%x' % _esp)
+            return False
+        if _esp == self.initial_vsp:
+            return False
+        return True
 
     def is_in_vm_exit(
             self,
@@ -563,14 +613,14 @@ class TraceAdimeht(TraceTaint):
             return x64dbg_trace
         # Current instruction is Virtual Register related Instruction (VRI)
 
-        _in_virtualized_instruction = self.is_in_virtualized_instruction_tricky_way(x64dbg_trace, initial_esp)
+        _in_virtualized_instruction = self.is_in_virtualized_instruction_tricky_way_2(x64dbg_trace, initial_esp)
         if _in_virtualized_instruction is False:
             if self.vm_enter_begin_trace is None:
                 self.vm_enter_begin_trace = x64dbg_trace
             else:
                 self.vm_enter_end_trace = x64dbg_trace
         else:
-            if self.vm_enter_begin_trace is not None:
+            if self.vm_enter_begin_trace is not None and self.vm_enter_end_trace is not None:
                 self.vm_enters.append({
                     'begin': self.vm_enter_begin_trace['id'],
                     'end': self.vm_enter_end_trace['id']
@@ -597,6 +647,7 @@ class TraceAdimeht(TraceTaint):
                     'begin': self.vm_vri_begin_trace['id'],
                     'end': self.vm_vri_end_trace['id'],
                 })
+                self.initial_vsp = None
         else:
             if self.vm_exit_step_count < 8:
                 self.vm_exit_begin_trace = None
