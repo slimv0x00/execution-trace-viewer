@@ -231,6 +231,7 @@ class PluginMvAdimeht(IPlugin):
                     _comments.append(_new_trace_taint['comment'])
                 _x64dbg_trace['comment'] = ' | '.join(_comments)
                 _x64dbg_trace['taints'] = _new_trace_taint['taints']
+                _x64dbg_trace['irs'] = _new_trace_adimeht['irs']
                 _result_x64dbg_traces.append(_x64dbg_trace)
             except Exception as e:
                 _result_x64dbg_traces.append(_x64dbg_trace.copy())
