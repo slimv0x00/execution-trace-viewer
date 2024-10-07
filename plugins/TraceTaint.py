@@ -733,4 +733,6 @@ class TraceTaint:
 
         x64dbg_trace['comment'] = ' | '.join(self.logs_to_show_in_comment)
         x64dbg_trace['taints'] = self.get_tainted_operands()[:]
+        x64dbg_trace['dst'] = _dst_operands[:]
+        x64dbg_trace['src'] = _src_operands[:]
         return x64dbg_trace

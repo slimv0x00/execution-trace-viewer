@@ -231,6 +231,8 @@ class PluginMvAdimeht(IPlugin):
                     _comments.append(_new_trace_taint['comment'])
                 _x64dbg_trace['comment'] = ' | '.join(_comments)
                 _x64dbg_trace['taints'] = _new_trace_taint['taints']
+                _x64dbg_trace['dst'] = _new_trace_taint['dst']
+                _x64dbg_trace['src'] = _new_trace_taint['src']
                 _x64dbg_trace['irs'] = _new_trace_adimeht['irs']
                 _result_x64dbg_traces.append(_x64dbg_trace)
             except Exception as e:
@@ -257,6 +259,8 @@ class PluginMvAdimeht(IPlugin):
                 #   'regchanges': 'ebp: 0x4ff8 ',
                 #   'taints': tainted_operands,
                 #   'irs': intermediate representation list,
+                #   'dst': destination operands as list[TraceOperandForX64DbgTrace],
+                #   'src': source operands as list[TraceOperandForX64DbgTrace],
                 # }
                 _new_trace_adimeht = self.adimehtModule.run_recognizing_vm_enter_and_exit(_x64dbg_trace, initial_esp)
                 if _new_trace_adimeht is None:
@@ -291,23 +295,14 @@ class PluginMvAdimeht(IPlugin):
                 #   'regchanges': 'ebp: 0x4ff8 ',
                 #   'taints': tainted_operands,
                 #   'irs': intermediate representation list,
+                #   'dst': destination operands as list[TraceOperandForX64DbgTrace],
+                #   'src': source operands as list[TraceOperandForX64DbgTrace],
                 # }
-                _index = _x64dbg_trace['id']
-                _comment = _x64dbg_trace['comment']
-                _is_in_virtualized_instruction = False
-
-                if _comment.find('IR') != -1:
-                    _comment = '[VMI] ' + _comment
-                if _comment.find('VR') != -1:
-                    _comment = '[VRI] ' + _comment
-
-                for _vm_vri in self.adimehtModule.vm_vris:
-                    if _vm_vri['begin'] <= _index <= _vm_vri['end']:
-                        _is_in_virtualized_instruction = True
-                if _is_in_virtualized_instruction is True:
-                    if (_comment.find('VR') != -1) or (_comment.find('VB') != -1):
-                        _comment = '[VI] ' + _comment
-                _x64dbg_trace['comment'] = _comment
+                _new_trace_adimeht = self.adimehtModule.run_identifying_virtual_instruction(_x64dbg_trace)
+                _comments = []
+                if _new_trace_adimeht['comment'] != '':
+                    _comments.append(_new_trace_adimeht['comment'])
+                _x64dbg_trace['comment'] = ' | '.join(_comments)
                 _result_x64dbg_traces.append(_x64dbg_trace)
             except Exception as e:
                 _result_x64dbg_traces.append(_x64dbg_trace.copy())

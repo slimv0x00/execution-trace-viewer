@@ -159,3 +159,11 @@ class TraceOperandForX64DbgTrace:
 
         _memory_address = _base_value + (_index_value * _scale) + _disp
         return _memory_address, _memory_formula
+
+    def is_the_operand_derived_from_me(self, operand) -> bool:
+        _my_operand_name = self.get_operand_name()
+        _operand_formula = operand.get_memory_formula()
+        for _operand_formula_element in _operand_formula:
+            if _my_operand_name == _operand_formula_element:
+                return True
+        return False

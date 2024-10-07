@@ -5,6 +5,7 @@ from plugins.TraceAdimehtOperand import TraceAdimehtOperandForX64DbgTrace
 from plugins.TraceTaint import TraceTaint
 
 import capstone
+import re
 
 
 class TraceAdimeht(TraceTaint):
@@ -654,5 +655,143 @@ class TraceAdimeht(TraceTaint):
             self.vm_exit_step_count = 0
 
         self.vm_previous_trace = x64dbg_trace
+        x64dbg_trace['comment'] = _comment
+        return x64dbg_trace
+
+    @staticmethod
+    def parse_intermediate_representation(index: int, ir: str) -> dict[str, str] | None:
+        _reg_exps = [
+            r'(?P<operator>[^ ]+) (?P<dst>[^,]+), (?P<src>[^,]+)',
+            r'(?P<operator>[^ ]+) (?P<dst>[^,]+)',
+        ]
+        for _reg_exp in _reg_exps:
+            _match = re.match(_reg_exp, ir)
+            if _match is None:
+                continue
+            # ir_structure
+            return {
+                'index': index,
+                'operator': _match.group('operator'),
+                'dst': _match.group('dst'),
+                'src': _match.group('src') if 'src' in _match.groupdict() else '',
+            }
+        return None
+
+    # candidate list of list which contains ir_structure
+    candidates_of_dummy_irs: list[list[dict[str, str]]] = []
+    indexes_for_dummy_ir: list[int] = []
+
+    def identify_single_operand_dummy_ir(self, x64dbg_trace, ir_structure):
+        _operator = ir_structure['operator']
+        _dst_ir = ir_structure['dst']
+        _src_ir = ir_structure['src']
+        if _dst_ir == _src_ir:
+            self.indexes_for_dummy_ir.append(int(ir_structure['index']))
+            return
+        _idx_dummy_irs_to_remove: list[int] = []
+        _is_appended = False
+        for _idx in range(len(self.candidates_of_dummy_irs)):
+            _candidate_of_dummy_irs = self.candidates_of_dummy_irs[_idx]
+            _head_ir_structure = _candidate_of_dummy_irs[0]
+            _tail_ir_structure = _candidate_of_dummy_irs[-1]
+            if _operator == 'MOV':
+                if _dst_ir == _tail_ir_structure['dst']:
+                    _idx_dummy_irs_to_remove.append(_idx)
+                if _src_ir == _tail_ir_structure['dst']:
+                    _candidate_of_dummy_irs.append(ir_structure)
+                    if _dst_ir == _head_ir_structure['src']:
+                        _idx_dummy_irs: list[int] = [
+                            int(_ir_structure['index']) for _ir_structure in _candidate_of_dummy_irs
+                        ]
+                        self.indexes_for_dummy_ir.extend(_idx_dummy_irs)
+                        _idx_dummy_irs_to_remove.append(_idx)
+                    _is_appended = True
+            else:
+                _is_appended = True
+                if (_dst_ir == _tail_ir_structure['dst']) or (_src_ir == _tail_ir_structure['dst']):
+                    _idx_dummy_irs_to_remove.append(_idx)
+
+        _idx_dummy_irs_to_remove = list(set(_idx_dummy_irs_to_remove))
+        _sorted_idx_dummy_irs_to_remove = sorted(_idx_dummy_irs_to_remove, reverse=True)
+        for _idx in _sorted_idx_dummy_irs_to_remove:
+            del self.candidates_of_dummy_irs[_idx]
+        if _is_appended is False:
+            _is_original_ebp = False
+            _dst_operands = x64dbg_trace['dst']
+            for _dst_operand in _dst_operands:
+                _tainted_operand = self.retrieve_same_operand_from_operands(_dst_operand, x64dbg_trace['taints'])
+                if _tainted_operand is not None:
+                    _tainted_by = _tainted_operand.get_tainted_by()
+                    if len(_tainted_by) == 1:
+                        if _tainted_by[0] == 'ebp':
+                            _is_original_ebp = True
+                            break
+            if _is_original_ebp is False:
+                self.candidates_of_dummy_irs.append([ir_structure])
+
+    def identify_dummy_ir(self, ir_structure):
+        _index = int(ir_structure['index'])
+        _operator = ir_structure['operator']
+        _dst = ir_structure['dst']
+        _src = ir_structure['src']
+        if _dst == _src:
+            self.indexes_for_dummy_ir.append(_index)
+            return
+        print(' - Candi : %d' % _index)
+
+    def identify_dummy_irs(self, x64dbg_trace):
+        _index = x64dbg_trace['id']
+        _irs = x64dbg_trace['irs']
+        for _ir in _irs:
+            _ir_structure = self.parse_intermediate_representation(_index, _ir)
+            if _ir_structure is None:
+                raise Exception('[E] Cannot parse IR at index %d : %s' % (_index, _ir))
+            self.identify_single_operand_dummy_ir(x64dbg_trace, _ir_structure)
+            # if x64dbg_trace['comment'].find('VR') == -1:
+            #     print('%s : %s' % (x64dbg_trace['id'], x64dbg_trace['comment']))
+            #     self.identify_dummy_ir(_ir_structure)
+
+    previous_vr_trace = None
+
+    def identify_virtual_instruction(self, x64dbg_trace):
+        _index: int = int(x64dbg_trace['id'])
+        _comment: str = x64dbg_trace['comment']
+        _dst_operands: list[TraceAdimehtOperandForX64DbgTrace] = x64dbg_trace['dst']
+        _src_operands: list[TraceAdimehtOperandForX64DbgTrace] = x64dbg_trace['src']
+        if _comment.find('VR') != -1:
+            self.previous_vr_trace = x64dbg_trace
+            return 'VI'
+        if _comment.find('IR') != -1:
+            _previous_dst_operands: list[TraceAdimehtOperandForX64DbgTrace] = self.previous_vr_trace['dst']
+            for _dst_operand in _dst_operands:
+                for _previous_dst_operand in _previous_dst_operands:
+                    if _previous_dst_operand.is_the_operand_derived_from_me(_dst_operand) is True:
+                        return 'VI'
+            for _src_operand in _src_operands:
+                for _previous_dst_operand in _previous_dst_operands:
+                    if _previous_dst_operand.is_the_operand_derived_from_me(_src_operand) is True:
+                        return 'VI'
+        return 'VIC'
+
+    def run_identifying_virtual_instruction(self, x64dbg_trace):
+        _index = x64dbg_trace['id']
+        _comment = x64dbg_trace['comment']
+        _is_in_virtualized_instruction = False
+
+        if _comment.find('IR') != -1:
+            # Virtual Machine related Instruction
+            _comment = '[VMI] ' + _comment
+        if _comment.find('VR') != -1:
+            # Virtual Register related Instruction
+            _comment = '[VRI] ' + _comment
+
+        for _vm_vri in self.vm_vris:
+            if _vm_vri['begin'] <= _index <= _vm_vri['end']:
+                _is_in_virtualized_instruction = True
+        if _is_in_virtualized_instruction is True:
+            if (_comment.find('VR') != -1) or (_comment.find('IR') != -1):
+                _instruction_type = self.identify_virtual_instruction(x64dbg_trace)
+                _comment = '[%s] ' % _instruction_type + _comment
+
         x64dbg_trace['comment'] = _comment
         return x64dbg_trace

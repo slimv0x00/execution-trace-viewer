@@ -44,11 +44,3 @@ class TraceTaintedOperandForX64DbgTrace(TraceOperandForX64DbgTrace):
     ):
         super().force_set_operand_as_register(operand_name)
         self.set_tainted_by(tainted_by)
-
-    def is_the_operand_derived_from_me(self, operand: TraceOperandForX64DbgTrace) -> bool:
-        _my_operand_name = self.get_operand_name()
-        _operand_formula = operand.get_memory_formula()
-        for _operand_formula_element in _operand_formula:
-            if _my_operand_name == _operand_formula_element:
-                return True
-        return False
