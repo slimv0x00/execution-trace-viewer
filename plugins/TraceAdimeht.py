@@ -688,10 +688,12 @@ class TraceAdimeht(TraceTaint):
         if _dst_ir == _src_ir:
             self.indexes_for_dummy_ir.append(int(ir_structure['index']))
             return
+        # print('[+] Index : %s (%s <- %s)' % (ir_structure['index'], _dst_ir, _src_ir))
         _idx_dummy_irs_to_remove: list[int] = []
         _is_appended = False
         for _idx in range(len(self.candidates_of_dummy_irs)):
             _candidate_of_dummy_irs = self.candidates_of_dummy_irs[_idx]
+            # print(' - %s' % _candidate_of_dummy_irs)
             _head_ir_structure = _candidate_of_dummy_irs[0]
             _tail_ir_structure = _candidate_of_dummy_irs[-1]
             if _operator == 'MOV':
@@ -739,9 +741,14 @@ class TraceAdimeht(TraceTaint):
             return
         print(' - Candi : %d' % _index)
 
-    def identify_dummy_irs(self, x64dbg_trace):
-        _index = x64dbg_trace['id']
-        _irs = x64dbg_trace['irs']
+    def run_identify_dummy_irs(self, x64dbg_trace):
+        _index: int = int(x64dbg_trace['id'])
+        _comment: str = x64dbg_trace['comment']
+        _irs: list[str] = x64dbg_trace['irs']
+
+        if _comment.find('[VI]') == -1:
+            return x64dbg_trace
+
         for _ir in _irs:
             _ir_structure = self.parse_intermediate_representation(_index, _ir)
             if _ir_structure is None:
@@ -750,6 +757,9 @@ class TraceAdimeht(TraceTaint):
             # if x64dbg_trace['comment'].find('VR') == -1:
             #     print('%s : %s' % (x64dbg_trace['id'], x64dbg_trace['comment']))
             #     self.identify_dummy_ir(_ir_structure)
+
+        x64dbg_trace['comment'] = _comment
+        return x64dbg_trace
 
     previous_vr_trace = None
 

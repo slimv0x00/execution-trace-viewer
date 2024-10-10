@@ -236,7 +236,7 @@ class TraceTaint:
             capstone.x86.X86_INS_MOV, capstone.x86.X86_INS_MOVZX, capstone.x86.X86_INS_LEA,
             capstone.x86.X86_INS_AND, capstone.x86.X86_INS_OR, capstone.x86.X86_INS_XOR,
             capstone.x86.X86_INS_ADD, capstone.x86.X86_INS_SUB, capstone.x86.X86_INS_XCHG,
-            capstone.x86.X86_INS_CMPXCHG
+            capstone.x86.X86_INS_CMPXCHG, capstone.x86.X86_INS_IMUL,
         ]:
             if len(operands) == 0 or len(operands) > 2:
                 return None, None
@@ -249,13 +249,17 @@ class TraceTaint:
                                                               capstone.x86.X86_INS_SHR, capstone.x86.X86_INS_SHL]:
             _dst_operands.append(operands[0])
         elif self.context.current_capstone_instruction.id in [capstone.x86.X86_INS_STD, capstone.x86.X86_INS_RDTSC,
+                                                              capstone.x86.X86_INS_CDQ,
                                                               capstone.x86.X86_INS_PUSHAL, capstone.x86.X86_INS_POPAL]:
             # todo: PUSHAL and POPAL SHOULD BE HANDLED ANOTHER WAY !!!!!!!!!!!!!!!!!!!!!!!!
             pass
         else:
             raise Exception(
                 '[E] Unhandled instruction ID : %s (https://github.com/capstone-engine/capstone/blob/master/include'
-                '/capstone/x86.h)' % self.context.current_capstone_instruction.id)
+                '/capstone/x86.h)\n - Operands : %s' % (
+                    self.context.current_capstone_instruction.id,
+                    [_operand.get_operand_name() for _operand in operands],
+                ))
         return _dst_operands, _src_operands
 
     def retrieve_dst_and_src_operands(self, x64dbg_trace) -> (

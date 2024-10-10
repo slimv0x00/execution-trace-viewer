@@ -312,6 +312,74 @@ class PluginMvAdimeht(IPlugin):
                 break
         return _result_x64dbg_traces
 
+    def run_stage_4(self, x64dbg_traces):
+        _result_x64dbg_traces = []
+        self.adimehtModule.indexes_for_dummy_ir = []
+        for _x64dbg_trace in x64dbg_traces:
+            try:
+                # _trace
+                # {
+                #   'id': 0,
+                #   'ip': 4242012,
+                #   'disasm': 'push 0xaa0be70a',
+                #   'comment': 'push encrypted vm_eip',
+                #   'regs': [3806, 309, 326, 292, 0, 20476, 360, 377, 4242012, 0],
+                #   'opcodes': '680ae70baa',
+                #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
+                #   'regchanges': 'ebp: 0x4ff8 ',
+                #   'taints': tainted_operands,
+                #   'irs': intermediate representation list,
+                #   'dst': destination operands as list[TraceOperandForX64DbgTrace],
+                #   'src': source operands as list[TraceOperandForX64DbgTrace],
+                # }
+                _new_trace_adimeht = self.adimehtModule.run_identify_dummy_irs(_x64dbg_trace)
+                _comments = []
+                if _new_trace_adimeht['comment'] != '':
+                    _comments.append(_new_trace_adimeht['comment'])
+                _x64dbg_trace['comment'] = ' | '.join(_comments)
+                _result_x64dbg_traces.append(_x64dbg_trace)
+            except Exception as e:
+                _result_x64dbg_traces.append(_x64dbg_trace.copy())
+                print(traceback.format_exc())
+                print(e)
+                print(_x64dbg_trace)
+                break
+        return _result_x64dbg_traces
+
+    def run_stage_5(self, x64dbg_traces):
+        self.adimehtModule.indexes_for_dummy_ir = []
+        for _x64dbg_trace in x64dbg_traces:
+            try:
+                # _trace
+                # {
+                #   'id': 0,
+                #   'ip': 4242012,
+                #   'disasm': 'push 0xaa0be70a',
+                #   'comment': 'push encrypted vm_eip',
+                #   'regs': [3806, 309, 326, 292, 0, 20476, 360, 377, 4242012, 0],
+                #   'opcodes': '680ae70baa',
+                #   'mem': [{'access': 'WRITE', 'addr': 20472, 'value': 2852906762}],
+                #   'regchanges': 'ebp: 0x4ff8 ',
+                #   'taints': tainted_operands,
+                #   'irs': intermediate representation list,
+                #   'dst': destination operands as list[TraceOperandForX64DbgTrace],
+                #   'src': source operands as list[TraceOperandForX64DbgTrace],
+                # }
+                _index: int = int(_x64dbg_trace['id'])
+                _comment: str = _x64dbg_trace['comment']
+                if _comment.find('[VI]') == -1:
+                    continue
+                if _index not in self.adimehtModule.indexes_for_dummy_ir:
+                    _irs: list[str] = _x64dbg_trace['irs']
+                    for _ir in _irs:
+                        self.api.print('%s' % _ir)
+
+            except Exception as e:
+                print(traceback.format_exc())
+                print(e)
+                print(_x64dbg_trace)
+                break
+
     def execute(self, api: Api):
         self.api = api
         self.capstone_bridge = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
@@ -379,6 +447,7 @@ class PluginMvAdimeht(IPlugin):
         _stage1_traces = []
         _stage2_traces = []
         _stage3_traces = []
+        _stage4_traces = []
         print('[+] Run stage 1 : Analyzing internal structure')
         _stage1_traces = self.run_stage_1(
             _x64dbg_traces,
@@ -415,6 +484,18 @@ class PluginMvAdimeht(IPlugin):
         if len(_stage3_traces) > 0:
             print(' - Length of filtered trace: %d' % len(_stage3_traces))
             _traces_to_show = _stage3_traces
+        print('[+] Run stage 4 : Identifying dummy virtual instruction')
+        _stage4_traces = self.run_stage_4(_stage3_traces)
+        if len(_stage4_traces) > 0:
+            print(' - Length of filtered trace: %d' % len(_stage4_traces))
+            [
+                print(' - Dummy VI index : %d' % _index_for_dummy_ir)
+                for _index_for_dummy_ir in sorted(self.adimehtModule.indexes_for_dummy_ir)
+            ]
+            _traces_to_show = _stage4_traces
+        print('[+] Run stage 5 : Printing virtual instruction')
+        self.run_stage_5(_stage4_traces)
 
         self.api.set_filtered_trace(_traces_to_show)
         self.api.show_filtered_trace()
+        print('[+] Done')
