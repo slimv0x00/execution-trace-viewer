@@ -711,12 +711,6 @@ class TraceTaint:
     # }
     def run_taint_single_line_by_x64dbg_trace(self, x64dbg_trace):
         self.logs_to_show_in_comment = []
-
-        # # todo: for debugging begin ##################################
-        if self.context.x64dbg_trace['id'] == 218:
-            self.api.print(self.context.x64dbg_trace['id'])
-        # # todo: for debugging end ##################################
-
         self.context.set_context_by_x64dbg_trace(x64dbg_trace)
         _dst_operands: list[TraceOperandForX64DbgTrace] | None = None
         _src_operands: list[TraceOperandForX64DbgTrace] | None = None
