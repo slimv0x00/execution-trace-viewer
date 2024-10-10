@@ -302,6 +302,19 @@ class TraceAdimeht(TraceTaint):
                                                         _operand.get_tainted_by(),
                                                     ))
 
+    def get_operand_name_for_ir(
+            self,
+            operand: TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace,
+    ) -> str | None:
+        _result = None
+        if type(operand) is TraceAdimehtOperandForX64DbgTrace:
+            _result = operand.get_vm_part()
+            if _result == '':
+                _result = operand.get_operand_name()
+        else:
+            _result = operand.get_operand_name()
+        return _result
+
     def generate_pseudo_ir(
             self,
             dst_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
@@ -315,20 +328,10 @@ class TraceAdimeht(TraceTaint):
 
         _dst = None
         if len(dst_operands) > 0:
-            if type(dst_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
-                _dst = dst_operands[0].get_vm_part()
-                if _dst == '':
-                    _dst = dst_operands[0].get_operand_name()
-            else:
-                _dst = dst_operands[0].get_operand_name()
+            _dst = self.get_operand_name_for_ir(dst_operands[0])
         _src = None
         if len(src_operands) > 0:
-            if type(src_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
-                _src = src_operands[0].get_vm_part()
-                if _src == '':
-                    _src = src_operands[0].get_operand_name()
-            else:
-                _src = src_operands[0].get_operand_name()
+            _src = self.get_operand_name_for_ir(src_operands[0])
 
         if logging_pseudo_ir is True:
             self.logs_to_show_in_comment.append('[IR]')
@@ -451,11 +454,6 @@ class TraceAdimeht(TraceTaint):
     def run_adimeht_single_line_by_x64dbg_trace(self, x64dbg_trace, initial_esp):
         self.logs_to_show_in_comment = []
         self.context.set_context_by_x64dbg_trace(x64dbg_trace)
-
-        # todo: for debugging begin ##################################
-        if self.context.x64dbg_trace['id'] == 9933:
-            self.api.print(self.context.x64dbg_trace['id'])
-        # todo: for debugging end ##################################
 
         _you_are_in_vm = self.check_you_are_in_vm()
         if self.logging_you_are_in_vm:
