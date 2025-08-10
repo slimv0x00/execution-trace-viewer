@@ -248,6 +248,33 @@ class TraceTaint:
                                                               capstone.x86.X86_INS_CMP,
                                                               capstone.x86.X86_INS_SHR, capstone.x86.X86_INS_SHL]:
             _dst_operands.append(operands[0])
+        elif self.context.current_capstone_instruction.id in [capstone.x86.X86_INS_IDIV]:
+            _operand_eax = TraceOperandForX64DbgTrace(self.context, None)
+            _register_name_eax = 'eax'
+            _operand_eax_value = self.context.get_register_value(_register_name_eax)
+            _operand_eax.force_set_operand(
+                'reg',
+                _register_name_eax,
+                _operand_eax_value,
+                [],
+            )
+            _dst_operands.append(_operand_eax)
+            # todo: edx should be added as destination operand begin
+            # _operand_edx = TraceOperandForX64DbgTrace(self.context, None)
+            # _register_name_edx = 'edx'
+            # _operand_edx_value = self.context.get_register_value(_register_name_edx)
+            # _operand_edx.force_set_operand(
+            #     'reg',
+            #     _register_name_edx,
+            #     _operand_edx_value,
+            #     [],
+            # )
+            # _dst_operands.append(_operand_edx)
+            # todo: edx should be added as destination operand end
+            # todo: eax should be added as source operand begin
+            # _src_operands.append(_operand_eax)
+            # todo: eax should be added as source operand end
+            _src_operands.append(operands[0])
         elif self.context.current_capstone_instruction.id in [capstone.x86.X86_INS_STD, capstone.x86.X86_INS_RDTSC,
                                                               capstone.x86.X86_INS_CDQ,
                                                               capstone.x86.X86_INS_PUSHAL, capstone.x86.X86_INS_POPAL]:
