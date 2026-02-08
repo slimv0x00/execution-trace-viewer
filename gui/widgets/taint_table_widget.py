@@ -17,9 +17,12 @@ class TaintTableWidget(QTableWidget):
             self.setRowCount(0)
         else:
             self.setRowCount(len(self.taint_data))
-            for i, taint in enumerate(self.taint_data):
-                self.setItem(i, 0, QTableWidgetItem(taint.get_operand_name()))
-                self.setItem(i, 1, QTableWidgetItem(str(taint.get_tainted_by())))
+            for i, taint_dict in enumerate(self.taint_data):# 딕셔너리 키 접근 ('name', 'symbol')
+                name = taint_dict.get('name', 'Unknown')
+                symbol = taint_dict.get('symbol', '')
+
+                self.setItem(i, 0, QTableWidgetItem(name))
+                self.setItem(i, 1, QTableWidgetItem(symbol))
             self.update_column_widths()
 
     def update_column_widths(self):

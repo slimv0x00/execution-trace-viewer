@@ -83,7 +83,7 @@ class MainWindow(QMainWindow):
 
         # make trace table wider than regs&mem
         self.splitter1.setSizes([1000, 100])
-        self.splitter2.setSizes([600, 100])
+        self.splitter2.setSizes([300, 300, 300])
 
         # Init trace table
         self.trace_table.itemSelectionChanged.connect(self.on_trace_table_row_changed)
