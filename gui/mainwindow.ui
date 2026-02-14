@@ -285,6 +285,35 @@
                <number>22</number>
               </attribute>
              </widget>
+             <widget class="AdimehtTableWidget" name="adimeht_table">
+              <property name="minimumSize">
+               <size>
+                <width>240</width>
+                <height>100</height>
+               </size>
+              </property>
+              <property name="font">
+               <font>
+                <family>Courier</family>
+                <pointsize>8</pointsize>
+               </font>
+              </property>
+              <property name="gridStyle">
+               <enum>Qt::DashLine</enum>
+              </property>
+              <attribute name="horizontalHeaderVisible">
+               <bool>true</bool>
+              </attribute>
+              <attribute name="verticalHeaderVisible">
+               <bool>false</bool>
+              </attribute>
+              <attribute name="verticalHeaderDefaultSectionSize">
+               <number>24</number>
+              </attribute>
+              <attribute name="verticalHeaderMinimumSectionSize">
+               <number>22</number>
+              </attribute>
+             </widget>
             </widget>
            </widget>
           </item>
@@ -403,6 +432,11 @@
    <class>TaintTableWidget</class>
    <extends>QTableWidget</extends>
    <header>gui/widgets/taint_table_widget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>AdimehtTableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>gui/widgets/adimeht_table_widget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

@@ -221,6 +221,11 @@ class TraceContext:
         else:
             sym_expr = BitVecVal(conc_val, size * 8)
 
+        # [Hook] 쓰기 전 값 읽기 (Old Value) - Diff를 위해
+        old_sym_for_hook = None
+        if self.hook_memory_write:
+            _, old_sym_for_hook = self.get_memory(addr, size)
+
         # Wide symbolic store: invalidate overlapping entries, then store
         write_end = addr + size
         overlapping = [k for k in self.mem_wide_symbolic
@@ -259,9 +264,7 @@ class TraceContext:
 
         # Hook 호출
         if self.hook_memory_write:
-            # 훅에는 원본(전체) 수식을 넘겨주므로 확인용으로 좋습니다.
-            _, old_sym = self.get_memory(addr, size)
-            self.hook_memory_write(addr, old_sym, sym_expr)
+            self.hook_memory_write(addr, old_sym_for_hook, sym_expr)
 
     def get_memory(self, addr, size):
         # Fast path: return full-width expression from wide store (avoids byte decomposition)

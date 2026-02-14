@@ -379,15 +379,23 @@ class TraceTaint:
     # [Handlers] Semantic Logic
     # =========================================================================
     def _handle_mov(self, operands, ip):
-        """MOV dest, src"""
+        """MOV, MOVSX, MOVZX 공통 핸들러"""
         if len(operands) < 2: return
         dst, src = operands[0], operands[1]
 
-        # Source 읽기
-        val_c, val_s = src.read(self.ctx, ip)
+        s_c, s_s = src.read(self.ctx, ip)
+        dst_bits = dst.size * 8
 
-        # Destination 쓰기
-        dst.write(self.ctx, val_c, val_s, ip)
+        # [핵심 보정] Src와 Dst의 크기가 다를 경우 맞춰줌 (Z3 충돌 방지)
+        if s_s is not None and s_s.size() != dst_bits:
+            if s_s.size() < dst_bits:
+                # 엄밀히 MOVSX는 부호 확장(SignExt)을 해야 하지만,
+                # Taint 흐름(오염 여부) 추적 목적에서는 ZeroExt로 통일해도 완벽히 동작합니다.
+                s_s = z3.ZeroExt(dst_bits - s_s.size(), s_s)
+            else:
+                s_s = z3.Extract(dst_bits - 1, 0, s_s)
+
+        dst.write(self.ctx, s_c, s_s, ip)
 
     def _handle_lea(self, operands, ip):
         """LEA dest, [mem] -> 주소 자체를 값으로 저장"""
@@ -409,25 +417,38 @@ class TraceTaint:
         dst_c, dst_s = dst.read(self.ctx, ip)
         src_c, src_s = src.read(self.ctx, ip)
 
+        dst_bits = dst.size * 8
+        src_bits = src.size * 8
+
+        if dst_s is None: dst_s = z3.BitVecVal(dst_c, dst_bits)
+        if src_s is None: src_s = z3.BitVecVal(src_c, src_bits)
+
         # 2. 연산 수행 (Concrete & Symbolic)
         # Concrete 연산은 Python 연산자 오버로딩 or 마스킹 필요하지만
         # 여기서는 Z3 식 생성에 집중 (Concrete 값은 TraceContext가 정답지(regchanges)로 보정하므로 생략 가능)
         # 하지만 시뮬레이션을 위해 단순 연산 수행 (Overflow 무시)
-        # new_conc = z3_op_func(dst_c, src_c) # Python int끼리 연산
 
-        # Z3 연산 (핵심)
-        # dst_s와 src_s는 이미 BitVec이거나 BitVecVal(상수)임
-        new_sym = z3_op_func(dst_s, src_s)
+        # 두 피연산자의 Z3 비트 크기를 강제로 맞춤
+        if dst_s.size() > src_s.size():
+            src_s = z3.ZeroExt(dst_s.size() - src_s.size(), src_s)
+        elif dst_s.size() < src_s.size():
+            dst_s = z3.ZeroExt(src_s.size() - dst_s.size(), dst_s)
 
-        # 단순화 (선택 사항: 식이 너무 커지는 것 방지)
-        # new_sym = simplify(new_sym)
+        # 연산 수행 (이제 두 크기가 무조건 같음)
+        new_sym = z3.simplify(z3_op_func(dst_s, src_s))
 
-        # 3. 결과 쓰기
-        # Concrete 값은 정확성을 위해 Trace의 regchanges를 믿거나, 여기서 계산해서 넣음
-        # 일단은 0이나 dst_c로 넣어두고, Context의 load_trace_line이 보정하게 하는 패턴 추천
-        dst.write(self.ctx, 0, new_sym, ip)
+        # Concrete 값은 오버플로우 방지를 위해 마스킹 처리
+        # (TraceViewer 환경이라면 사실 Trace 결과를 믿는 것이 제일 좋지만 로직 완성도를 위해 추가)
+        new_conc = z3_op_func(dst_c, src_c) & ((1 << dst_bits) - 1)
 
-        # 3. [핵심] Flags 업데이트 추가
+        # 목적지 크기에 맞게 최종 자르기/늘리기
+        if new_sym.size() != dst_bits:
+            if new_sym.size() < dst_bits:
+                new_sym = z3.ZeroExt(dst_bits - new_sym.size(), new_sym)
+            else:
+                new_sym = z3.Extract(dst_bits - 1, 0, new_sym)
+
+        dst.write(self.ctx, new_conc, new_sym, ip)
         self._update_flags(new_sym)
 
     def _handle_unary_op(self, operands, ip, z3_op_func, update_flags=True):

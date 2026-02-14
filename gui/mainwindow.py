@@ -83,7 +83,7 @@ class MainWindow(QMainWindow):
 
         # make trace table wider than regs&mem
         self.splitter1.setSizes([1000, 100])
-        self.splitter2.setSizes([300, 300, 300])
+        self.splitter2.setSizes([300, 300, 300, 300])
 
         # Init trace table
         self.trace_table.itemSelectionChanged.connect(self.on_trace_table_row_changed)
@@ -151,6 +151,11 @@ class MainWindow(QMainWindow):
         self.taint_table.setColumnCount(len(prefs.TAINT_LABELS))
         self.taint_table.setHorizontalHeaderLabels(prefs.TAINT_LABELS)
         self.taint_table.horizontalHeader().setStretchLastSection(True)
+
+        # Init adimeht table
+        self.adimeht_table.setColumnCount(len(prefs.ADIMEHT_LABELS))
+        self.adimeht_table.setHorizontalHeaderLabels(prefs.ADIMEHT_LABELS)
+        self.adimeht_table.horizontalHeader().setStretchLastSection(True)
 
         # Init bookmark table
         self.bookmark_table.setColumnCount(len(prefs.BOOKMARK_LABELS))
@@ -323,6 +328,10 @@ class MainWindow(QMainWindow):
         if "taints" in self.trace_data.trace[row_id]:
             taints = self.trace_data.trace[row_id]["taints"]
         self.taint_table.set_data(taints)
+        adimehts = []
+        if "adimehts" in self.trace_data.trace[row_id]:
+            adimehts = self.trace_data.trace[row_id]["adimehts"]
+        self.adimeht_table.set_data(adimehts)
         self.update_status_bar()
 
     def on_filter_btn_clicked(self, filter_text: str):

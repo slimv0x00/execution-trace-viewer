@@ -1,418 +1,384 @@
-from core.api import Api
-from plugins.TraceContext import TraceContext
-from plugins.TraceOperand import TraceOperandForX64DbgTrace
-from plugins.TraceAdimehtOperand import TraceAdimehtOperandForX64DbgTrace
-from plugins.TraceTaint import TraceTaint
-
-import capstone
+from .TraceOperand import OperandType
 
 
-class TraceAdimeht(TraceTaint):
-    you_are_in_vm: bool = False
+class TraceAdimeht:
+    """VM Structure Mapper — classifies VBR-relative memory accesses as VB/VR/VL.
 
-    reg_vbr: TraceAdimehtOperandForX64DbgTrace = None
-    reg_vbr_value: int = 0
-    reg_vbr_name_for_tainted_by: str = 'vbr'
-    reg_vbr_role_name: str = 'VBR'
+    Register state model (no Z3):
+        ('vbr_ptr', offset)    — register = VBR + constant
+        ('vm_val', role)       — register holds value derived from a classified VM element
+        ('vbr_val_ptr', role)  — register = VBR + value_from_{role}
+        None                   — untracked
+    """
 
-    # list of taint [
-    #   {
-    #     labels: ['your input', ...],
-    #     name: 'eax' | '[0x401000]',
-    #   }, ...
-    # ]
-    tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = []
+    # Roles mapped to their depth
+    ROLE_DEPTH = {'VB': 1, 'VR': 2, 'VL': 3}
+    # Next role when dereferencing a value from a given role
+    NEXT_ROLE = {'VB': 'VR', 'VR': 'VL'}
 
-    logging_you_are_in_vm: bool = False
-    logging_on_vm_role_identified: bool = False
-    logging_on_vr_identified: bool = False
-    logging_on_lv_identified: bool = False
-    logging_pseudo_ir_operands: bool = False
-    logging_pseudo_ir: bool = True
+    def __init__(self, ctx):
+        """
+        :param ctx: TraceContext instance (used for concrete state + address resolution only)
+        """
+        self.ctx = ctx
+        self.is_vbr_initialized = False
 
-    def __init__(
-            self,
-            api: Api,
-            capstone_bridge,
-            context: TraceContext,
-            vbr_value: int,
-            logging_every_tainted_operands: bool = False,
-            logging_operands_for_instruction: bool = False,
-            logging_on_adding_and_removing_tainted_operand: bool = False,
-            logging_detail_of_tainted_operand_on_adding: bool = False,
-    ):
-        super().__init__(
-            api,
-            capstone_bridge,
-            context,
-            logging_every_tainted_operands=logging_every_tainted_operands,
-            logging_operands_for_instruction=logging_operands_for_instruction,
-            logging_on_adding_and_removing_tainted_operand=logging_on_adding_and_removing_tainted_operand,
-            logging_detail_of_tainted_operand_on_adding=logging_detail_of_tainted_operand_on_adding,
-        )
+        # Register states: ROOT reg_name (lowercase) -> tuple or None
+        self.reg_states = {}
 
-        # set VBR (Virtual machine Base Register)
-        self.reg_vbr = TraceAdimehtOperandForX64DbgTrace(self.context, None)
-        # context hasn't been initialized, so you cannot use force_set_adimeht_operand_as_register
-        self.reg_vbr.force_set_adimeht_operand(
-            'reg',
-            'ebp',
-            vbr_value,
-            [],
-            [self.get_reg_vbr_name_for_tainted_by()],
-            self.get_reg_vbr_role_name(),
-        )
-        self.set_reg_vbr_value(vbr_value)
+        # Classified VM elements: concrete_addr -> (role, depth, offset)
+        # e.g. 0x55568a + 0x1c -> ('VB', 1, 0x1c)
+        self.vm_elements = {}
 
-    def get_you_are_in_vm(self) -> bool:
-        return self.you_are_in_vm
+        # VBR register name (architecture-dependent)
+        self._vbr_reg = 'ebp' if ctx.arch_mode == 32 else 'rbp'
 
-    def get_reg_vbr_value(self) -> int:
-        return self.reg_vbr_value
+        # Instruction handlers
+        self._handlers = {
+            'MOV': self._handle_mov,
+            'MOVZX': self._handle_mov,
+            'MOVSX': self._handle_mov,
+            'ADD': self._handle_add_sub,
+            'SUB': self._handle_add_sub,
+            'LEA': self._handle_lea,
+            'XCHG': self._handle_xchg,
+        }
 
-    def get_reg_vbr_name_for_tainted_by(self) -> str:
-        return self.reg_vbr_name_for_tainted_by
+    # =========================================================================
+    # Register Name Normalization (sub-register → root register)
+    # =========================================================================
+    def _root_reg(self, reg_name):
+        """Normalize a register name to its root register.
 
-    def get_reg_vbr_role_name(self) -> str:
-        return self.reg_vbr_role_name
+        e.g. 32-bit: dx → edx, al → eax, esi → esi
+             64-bit: eax → rax, r8d → r8
+        """
+        root, _, _ = self.ctx._get_root_register_info(reg_name.lower())
+        return root
 
-    def set_you_are_in_vm(self, you_are_in_vm: bool):
-        self.you_are_in_vm = you_are_in_vm
+    def _get_state(self, reg_name):
+        """Get reg_state using the root register name."""
+        return self.reg_states.get(self._root_reg(reg_name))
 
-    def set_reg_vbr_value(self, reg_vbr_value: int):
-        self.reg_vbr_value = reg_vbr_value
+    # =========================================================================
+    # VBR Lifecycle
+    # =========================================================================
+    def init_vbr(self):
+        self.reg_states[self._vbr_reg] = ('vbr_ptr', 0)
+        self.is_vbr_initialized = True
 
-    def check_you_are_in_vm(self) -> bool:
-        _reg_vbr_value: int = self.get_reg_vbr_value()
-        _ebp_value: int = self.context.get_register_value('ebp')
-        _you_are_in_vm: bool = self.get_you_are_in_vm()
-        _result = False
-        # if EBP value is same as VBR, you are in VM
-        if _ebp_value == _reg_vbr_value:
-            if _you_are_in_vm is False:
-                # add EBP as VBR (Virtual machine Base Register) to tainted_operands
-                self.add_tainted_operand_to_tainted_operands(self.reg_vbr)
-            _result = True
+    def clear_vbr(self):
+        self.reg_states.clear()
+        self.is_vbr_initialized = False
+
+    # =========================================================================
+    # Main Entry
+    # =========================================================================
+    def process_instruction(self, inst_data):
+        if not self.is_vbr_initialized:
+            return True
+
+        inst_obj = inst_data.get('instruction_obj')
+        if inst_obj:
+            mnemonic = inst_obj.mnemonic.upper()
         else:
-            if _you_are_in_vm is True:
-                # remove VBR from tainted_operands
-                self.remove_tainted_operand_from_tainted_operands(self.reg_vbr)
-        self.set_you_are_in_vm(_result)
-        return _result
+            disasm = inst_data.get('disasm', '').upper()
+            parts = disasm.split()
+            mnemonic = parts[0] if parts else ''
+            if mnemonic == 'LOCK' and len(parts) > 1:
+                mnemonic = parts[1]
 
+        operands = inst_data.get('parsed_operands', [])
+        ip = inst_data.get('ip')
+
+        # Phase 1: Analyze instruction with CURRENT reg_states → classify + compute new tags
+        # new_tags uses ROOT register names as keys
+        new_tags = {}
+        if mnemonic in self._handlers:
+            new_tags = self._handlers[mnemonic](operands, ip, mnemonic)
+        else:
+            # Unknown instruction: clear all destination registers
+            new_tags = self._clear_destinations(operands)
+
+        # Phase 2: Parse regchanges → clear tags for modified registers (except freshly tagged)
+        # regchanges already uses root register names (e.g. 'edx' not 'dx')
+        regchanges_str = inst_data.get('regchanges', '')
+        changed_regs = self._parse_regchanges(regchanges_str)
+        for reg in changed_regs:
+            root = self._root_reg(reg)
+            if root not in new_tags:
+                self.reg_states.pop(root, None)
+
+        # Phase 3: Apply new tags
+        for reg, state in new_tags.items():
+            if state is None:
+                self.reg_states.pop(reg, None)
+            else:
+                self.reg_states[reg] = state
+
+        return True
+
+    # =========================================================================
+    # Instruction Handlers
+    # Each returns dict of {ROOT_reg_name: new_state_or_None}
+    # =========================================================================
+    def _handle_mov(self, operands, ip, mnemonic):
+        if len(operands) < 2:
+            return {}
+        dst, src = operands[0], operands[1]
+
+        # Only handle reg destinations
+        if dst.type != OperandType.REG:
+            # MOV [mem], reg — check if writing to a classified address (no state change)
+            if dst.type == OperandType.MEM:
+                self._try_classify_mem_operand(dst, ip)
+            return {}
+
+        dst_reg = self._root_reg(dst.reg_name)
+
+        # src = VBR register
+        if src.type == OperandType.REG and self._root_reg(src.reg_name) == self._vbr_reg:
+            return {dst_reg: ('vbr_ptr', 0)}
+
+        # src = register → copy state
+        if src.type == OperandType.REG:
+            src_state = self._get_state(src.reg_name)
+            return {dst_reg: src_state}
+
+        # src = [mem] → try to classify the memory access
+        if src.type == OperandType.MEM:
+            classification = self._try_classify_mem_operand(src, ip)
+            if classification is not None:
+                role, depth, offset = classification
+                return {dst_reg: ('vm_val', role, depth)}
+
+            # Not VBR-relative, but check if base is VM-derived →
+            # loading from a VM-derived address produces a VM-derived value
+            mem = src.mem_info
+            base = (mem.get('base') or '').lower()
+            if base:
+                base_state = self._get_state(base)
+                if base_state and base_state[0] == 'vm_val' and len(base_state) >= 3:
+                    return {dst_reg: ('vm_val', base_state[1], base_state[2])}
+
+            return {dst_reg: None}
+
+        # src = immediate → clear
+        return {dst_reg: None}
+
+    def _handle_add_sub(self, operands, ip, mnemonic):
+        if len(operands) < 2:
+            return {}
+        dst, src = operands[0], operands[1]
+
+        if dst.type != OperandType.REG:
+            return {}
+
+        dst_reg = self._root_reg(dst.reg_name)
+        dst_state = self.reg_states.get(dst_reg)
+
+        # dst = ('vbr_ptr', X), src = imm → ('vbr_ptr', X ± imm)
+        if dst_state and dst_state[0] == 'vbr_ptr' and src.type == OperandType.IMM:
+            old_offset = dst_state[1]
+            imm = src.imm_value
+            mask = (1 << self.ctx.arch_mode) - 1
+            if mnemonic == 'ADD':
+                new_offset = (old_offset + imm) & mask
+            else:  # SUB
+                new_offset = (old_offset - imm) & mask
+            return {dst_reg: ('vbr_ptr', new_offset)}
+
+        # dst = ('vm_val', role), src = imm → preserve ('vm_val', role)
+        # Adding/subtracting a constant to a VM-derived value doesn't change its VM-derived nature
+        if dst_state and dst_state[0] == 'vm_val' and src.type == OperandType.IMM:
+            return {dst_reg: dst_state}
+
+        # dst = ('vm_val', role), src = VBR register (ADD only) → ('vbr_val_ptr', role)
+        if (mnemonic == 'ADD' and dst_state and dst_state[0] == 'vm_val'
+                and src.type == OperandType.REG and self._root_reg(src.reg_name) == self._vbr_reg):
+            return {dst_reg: ('vbr_val_ptr', dst_state[1])}
+
+        # Symmetric: dst = VBR register state, src has ('vm_val', role) (ADD only)
+        if (mnemonic == 'ADD' and dst_state and dst_state[0] == 'vbr_ptr' and dst_state[1] == 0
+                and src.type == OperandType.REG):
+            src_state = self._get_state(src.reg_name)
+            if src_state and src_state[0] == 'vm_val':
+                return {dst_reg: ('vbr_val_ptr', src_state[1])}
+
+        # Everything else → clear
+        return {dst_reg: None}
+
+    def _handle_lea(self, operands, ip, mnemonic):
+        if len(operands) < 2:
+            return {}
+        dst, src = operands[0], operands[1]
+
+        if dst.type != OperandType.REG or src.type != OperandType.MEM:
+            return {}
+
+        dst_reg = self._root_reg(dst.reg_name)
+        mem = src.mem_info
+        base = (mem.get('base') or '').lower()
+        index = (mem.get('index') or '').lower()
+        disp = mem.get('disp', 0)
+
+        mask = (1 << self.ctx.arch_mode) - 1
+
+        base_root = self._root_reg(base) if base else ''
+        index_root = self._root_reg(index) if index else ''
+
+        # base=VBR, no index → ('vbr_ptr', disp)
+        if base_root == self._vbr_reg and not index:
+            return {dst_reg: ('vbr_ptr', disp & mask)}
+
+        # base=VBR, index has ('vm_val', role) → ('vbr_val_ptr', role)
+        if base_root == self._vbr_reg and index:
+            idx_state = self._get_state(index)
+            if idx_state and idx_state[0] == 'vm_val':
+                return {dst_reg: ('vbr_val_ptr', idx_state[1])}
+
+        # base has ('vbr_ptr', X), no index → ('vbr_ptr', X + disp)
+        if base and not index:
+            base_state = self._get_state(base)
+            if base_state and base_state[0] == 'vbr_ptr':
+                new_offset = (base_state[1] + disp) & mask
+                return {dst_reg: ('vbr_ptr', new_offset)}
+
+        # Everything else → clear
+        return {dst_reg: None}
+
+    def _handle_xchg(self, operands, ip, mnemonic):
+        if len(operands) < 2:
+            return {}
+        op1, op2 = operands[0], operands[1]
+
+        if op1.type != OperandType.REG or op2.type != OperandType.REG:
+            # If either is memory, clear both reg states involved
+            result = {}
+            if op1.type == OperandType.REG:
+                result[self._root_reg(op1.reg_name)] = None
+            if op2.type == OperandType.REG:
+                result[self._root_reg(op2.reg_name)] = None
+            return result
+
+        r1 = self._root_reg(op1.reg_name)
+        r2 = self._root_reg(op2.reg_name)
+        s1 = self.reg_states.get(r1)
+        s2 = self.reg_states.get(r2)
+        return {r1: s2, r2: s1}
+
+    def _clear_destinations(self, operands):
+        """For unhandled instructions, clear state of all written registers."""
+        result = {}
+        from .TraceOperand import OperandAccess
+        for op in operands:
+            if op.type == OperandType.REG and op.access in (OperandAccess.WRITE, OperandAccess.READ_WRITE):
+                result[self._root_reg(op.reg_name)] = None
+        return result
+
+    # =========================================================================
+    # Memory Access Classification
+    # =========================================================================
+    def _try_classify_mem_operand(self, mem_op, ip):
+        """Classify a memory operand as VB/VR/VL if it's VBR-relative.
+
+        Returns (role, depth, offset) or None.
+        Already-classified addresses keep their existing role.
+        """
+        addr_c, _ = mem_op.resolve_addr(self.ctx, ip)
+
+        # Already classified?
+        if addr_c in self.vm_elements:
+            return self.vm_elements[addr_c]
+
+        mem = mem_op.mem_info
+        base = (mem.get('base') or '').lower()
+        index = (mem.get('index') or '').lower()
+        disp = mem.get('disp', 0)
+
+        classification = None
+        mask = (1 << self.ctx.arch_mode) - 1
+
+        base_root = self._root_reg(base) if base else ''
+        index_root = self._root_reg(index) if index else ''
+
+        # Pattern 1: base=VBR, no index → VB (depth 1)
+        if base_root == self._vbr_reg and not index:
+            vbr_c, _, _ = self.ctx.get_register(self._vbr_reg)
+            offset = (addr_c - vbr_c) & mask
+            classification = ('VB', 1, offset)
+
+        # Pattern 2: base=VBR, index has ('vm_val', role) → next depth
+        elif base_root == self._vbr_reg and index:
+            idx_state = self._get_state(index)
+            if idx_state and idx_state[0] == 'vm_val':
+                src_role = idx_state[1]
+                if src_role in self.NEXT_ROLE:
+                    next_role = self.NEXT_ROLE[src_role]
+                    vbr_c, _, _ = self.ctx.get_register(self._vbr_reg)
+                    offset = (addr_c - vbr_c) & mask
+                    classification = (next_role, self.ROLE_DEPTH[next_role], offset)
+
+        # Pattern 3: base (non-VBR) with no index → check reg state
+        elif base and not index:
+            base_state = self._get_state(base)
+            if base_state:
+                if base_state[0] == 'vbr_ptr':
+                    # register = VBR + const → VB (depth 1)
+                    offset = (base_state[1] + disp) & mask
+                    classification = ('VB', 1, offset)
+                elif base_state[0] == 'vbr_val_ptr':
+                    # register = VBR + value_from_{role} → next depth
+                    src_role = base_state[1]
+                    if src_role in self.NEXT_ROLE:
+                        next_role = self.NEXT_ROLE[src_role]
+                        vbr_c, _, _ = self.ctx.get_register(self._vbr_reg)
+                        offset = (addr_c - vbr_c) & mask
+                        classification = (next_role, self.ROLE_DEPTH[next_role], offset)
+                elif base_state[0] == 'vm_val' and len(base_state) >= 3:
+                    # Dereferencing a VM value as pointer → same role, depth + 1
+                    src_role = base_state[1]
+                    src_depth = base_state[2]
+                    vbr_c, _, _ = self.ctx.get_register(self._vbr_reg)
+                    offset = (addr_c - vbr_c) & mask
+                    classification = (src_role, src_depth + 1, offset)
+
+        if classification is not None:
+            self.vm_elements[addr_c] = classification
+
+        return classification
+
+    # =========================================================================
+    # Regchanges Parsing
+    # =========================================================================
     @staticmethod
-    # vm_part_you_looking_for : should be one of ['VB', 'VR']
-    def get_vm_part_from_tainted_by_for_operand(
-            operand: TraceAdimehtOperandForX64DbgTrace,
-            vm_part_you_looking_for: str,
-    ):
-        _result = []
-        _vm_part_types = ['VB', 'VR']
-        if vm_part_you_looking_for not in _vm_part_types:
-            raise Exception('[E] Invalid VM part type you looking for, it should be one of %s : %s'
-                            % (_vm_part_types, vm_part_you_looking_for))
-        _vm_part_form_you_looking_for = '%s_0x' % vm_part_you_looking_for
-        _tainted_by_list = operand.get_tainted_by()
-        for _tainted_by in _tainted_by_list:
-            if _tainted_by.find(_vm_part_form_you_looking_for) == 0:
-                _result.append(_tainted_by)
-        return _result
+    def _parse_regchanges(regchanges_str):
+        """Parse 'ebp: 0x4ff8 ecx: 0x1234' → {'ebp', 'ecx'}"""
+        if not regchanges_str or not regchanges_str.strip():
+            return set()
+        result = set()
+        raw = regchanges_str.replace(':', '').split()
+        for i in range(0, len(raw), 2):
+            result.add(raw[i].lower())
+        return result
 
-    def identify_the_role_of_vm_part_for_operand(
-            self,
-            operand: TraceOperandForX64DbgTrace,
-    ):
-        _identified_role = None
-        _tainted_operands: list[TraceAdimehtOperandForX64DbgTrace] = self.get_tainted_operands()
-        _tainted_by_for_tainted_operand: list[str] = []
-        for _tainted_operand in _tainted_operands:
-            if _tainted_operand.is_the_operand_derived_from_me(operand) is False:
-                continue
-            _tainted_by_for_tainted_operand = _tainted_operand.get_tainted_by()
-            _vb_list = self.get_vm_part_from_tainted_by_for_operand(_tainted_operand, 'VB')
-            _vr_list = self.get_vm_part_from_tainted_by_for_operand(_tainted_operand, 'VR')
-            if self.reg_vbr_name_for_tainted_by in _tainted_by_for_tainted_operand:
-                if len(_vb_list) > 0:
-                    # on VR(Virtual Register)
-                    _identified_role = 'VR'
-                elif len(_vb_list) == 0 and len(_vr_list) == 0:
-                    # on VB(Virtual Bridge)
-                    if _identified_role is None:
-                        _identified_role = 'VB'
-                else:
-                    continue
-            elif len(_vr_list) > 0:
-                # on LV (Local Variable) # todo: maybe wrong? ###################################
-                _identified_role = 'LV'
-            else:
-                continue
+    # =========================================================================
+    # Public Queries
+    # =========================================================================
+    def get_element_at(self, addr):
+        """Return classification info (role, depth, offset) or None."""
+        return self.vm_elements.get(addr)
 
-        if _identified_role is None:
-            return _identified_role
+    def get_vm_elements_snapshot(self):
+        """Return list of classified elements for UI display.
 
-        _vb_operand = TraceAdimehtOperandForX64DbgTrace(self.context, None)
-        _operand_from_tainted_operands = self.retrieve_same_operand_from_tainted_operands(operand)
-        if _operand_from_tainted_operands is not None:
-            _vb_operand.force_set_adimeht_operand(
-                _operand_from_tainted_operands.get_operand_type(),
-                _operand_from_tainted_operands.get_operand_name(),
-                _operand_from_tainted_operands.get_operand_value(),
-                _operand_from_tainted_operands.get_memory_formula(),
-                _operand_from_tainted_operands.get_tainted_by(),
-                _identified_role,
-            )
-        else:
-            _vb_operand.force_set_adimeht_operand(
-                operand.get_operand_type(),
-                operand.get_operand_name(),
-                operand.get_operand_value(),
-                operand.get_memory_formula(),
-                [],
-                _identified_role,
-            )
-        _vb_operand.set_derived_from(_tainted_by_for_tainted_operand)
-        _vb_operand.set_vm_part_by_using_offset_from_vbr(self.reg_vbr)
-        _vm_part_name = _vb_operand.get_vm_part()
-
-        if _identified_role == 'VR':
-            if self.logging_on_vr_identified:
-                self.logs_to_show_in_comment.append('[%s : %s]'
-                                                    % (
-                                                        _vb_operand.get_vm_part(),
-                                                        _vb_operand.get_operand_name(),
-                                                    ))
-        elif _identified_role == 'LV':
-            if self.logging_on_lv_identified:
-                self.logs_to_show_in_comment.append('[%s : %s]'
-                                                    % (
-                                                        _vb_operand.get_vm_part(),
-                                                        _vb_operand.get_operand_name(),
-                                                    ))
-        if self.logging_on_vm_role_identified:
-            self.logs_to_show_in_comment.append('[Role: %s : %s from %s (%s)]'
-                                                % (
-                                                    _vb_operand.get_vm_part(),
-                                                    _vb_operand.get_operand_name(),
-                                                    _vb_operand.get_tainted_by(),
-                                                    _vb_operand.get_derived_from(),
-                                                ))
-
-        _tainted_by_for_vb_operand = _vb_operand.get_tainted_by()
-        if _vm_part_name not in _tainted_by_for_vb_operand:
-            _tainted_by_for_vb_operand.append(_vm_part_name)
-            _vb_operand.set_tainted_by(_tainted_by_for_vb_operand)
-        self.add_tainted_operand_to_tainted_operands(_vb_operand)
-
-        return _identified_role
-
-    def identify_the_role_of_vm_part_for_operands(
-            self,
-            operands: list[TraceOperandForX64DbgTrace],
-            from_memory_formula: bool = False,
-    ):
-        for _operand in operands:
-            if from_memory_formula:
-                _memory_variables: list[TraceOperandForX64DbgTrace] = \
-                    self.retrieve_operands_from_input_operand_memory_formulas(_operand)
-                for _memory_variable in _memory_variables:
-                    self.identify_the_role_of_vm_part_for_operand(_memory_variable)
-            else:
-                self.identify_the_role_of_vm_part_for_operand(_operand)
-
-    def resolve_operands_to_adimeht_operands(self, operands: list[TraceOperandForX64DbgTrace])\
-            -> list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace]:
-        _result = []
-        for _operand in operands:
-            _operand_from_tainted_operands = self.retrieve_same_operand_from_tainted_operands(_operand)
-            if _operand_from_tainted_operands is None:
-                _result.append(_operand)
-                continue
-            _result.append(_operand_from_tainted_operands)
-        return _result
-
-    @staticmethod
-    def operands_contains_operand_for_pseudo_ir(
-            operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
-    ):
-        _result = False
-        _determined_roles_to_follow = ['VR', 'LV']
-        for _operand in operands:
-            if type(_operand) is not TraceAdimehtOperandForX64DbgTrace:
-                continue
-            _determined_role = _operand.get_determined_role()
-            if _determined_role not in _determined_roles_to_follow:
-                continue
-            _result = True
-            break
-        return _result
-
-    def print_pseudo_ir_related_operands(
-            self,
-            operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
-            operand_type_to_show: str,
-    ):
-        for _operand in operands:
-            if type(_operand) is TraceOperandForX64DbgTrace:
-                self.logs_to_show_in_comment.append('[%s: %s]' % (operand_type_to_show, _operand.get_operand_name()))
-            elif type(_operand) is TraceAdimehtOperandForX64DbgTrace:
-                self.logs_to_show_in_comment.append('[%s: %s (%s)]'
-                                                    % (
-                                                        operand_type_to_show,
-                                                        _operand.get_vm_part(),
-                                                        _operand.get_tainted_by(),
-                                                    ))
-            else:
-                self.logs_to_show_in_comment.append('[%s: %s (%s)]'
-                                                    % (
-                                                        operand_type_to_show,
-                                                        _operand.get_operand_name(),
-                                                        _operand.get_tainted_by(),
-                                                    ))
-
-    def generate_pseudo_ir(
-            self,
-            dst_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
-            src_operands: list[TraceOperandForX64DbgTrace | TraceAdimehtOperandForX64DbgTrace],
-    ):
-        if len(dst_operands) > 1 or len(src_operands) > 1:
-            raise Exception('[E] Cannot generate pseudo IR : Too many operand\n - Dst : %s\n - Src : %s'
-                            % (dst_operands, src_operands))
-
-        _dst = None
-        if len(dst_operands) > 0:
-            if type(dst_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
-                _dst = dst_operands[0].get_vm_part()
-                if _dst == '':
-                    _dst = dst_operands[0].get_operand_name()
-            else:
-                _dst = dst_operands[0].get_operand_name()
-        _src = None
-        if len(src_operands) > 0:
-            if type(src_operands[0]) is TraceAdimehtOperandForX64DbgTrace:
-                _src = src_operands[0].get_vm_part()
-                if _src == '':
-                    _src = src_operands[0].get_operand_name()
-            else:
-                _src = src_operands[0].get_operand_name()
-
-        self.logs_to_show_in_comment.append('[IR]')
-        if len(self.context.current_capstone_instruction.groups) > 0:
-            for _g in self.context.current_capstone_instruction.groups:
-                if _g == capstone.x86.X86_GRP_CALL:
-                    self.logs_to_show_in_comment.append('CALL %s' % _src)
-                    return
-                elif _g == capstone.x86.X86_GRP_JUMP:
-                    self.logs_to_show_in_comment.append('JMP %s' % _src)
-                    return
-                elif _g == capstone.x86.X86_GRP_RET or _g == capstone.x86.X86_GRP_IRET:
-                    self.logs_to_show_in_comment.append(self.context.x64dbg_trace['disasm'])
-                    return
-
-        if self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_MOV,
-            capstone.x86.X86_INS_PUSH,
-            capstone.x86.X86_INS_PUSHFD,
-            capstone.x86.X86_INS_POP,
-            capstone.x86.X86_INS_POPFD,
-        ]:
-            self.logs_to_show_in_comment.append('MOV %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_MOVZX,
-        ]:
-            self.logs_to_show_in_comment.append('MOVZX %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_ADD,
-        ]:
-            self.logs_to_show_in_comment.append('ADD %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_SUB,
-        ]:
-            self.logs_to_show_in_comment.append('SUB %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_XCHG,
-        ]:
-            # self.logs_to_show_in_comment.append('XCHG %s, %s' % (_dst, _src))
-            self.logs_to_show_in_comment.append('MOV %%tmp, %s' % _src)
-            self.logs_to_show_in_comment.append('MOV %s, %s' % (_src, _dst))
-            self.logs_to_show_in_comment.append('MOV %s, %%tmp' % _dst)
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_CMPXCHG,
-        ]:
-            self.logs_to_show_in_comment.append('CMPXCHG %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_AND,
-        ]:
-            self.logs_to_show_in_comment.append('AND %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_OR,
-        ]:
-            self.logs_to_show_in_comment.append('OR %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_XOR,
-        ]:
-            self.logs_to_show_in_comment.append('XOR %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_CMP,
-        ]:
-            self.logs_to_show_in_comment.append('CMP %s, %s' % (_dst, _src))
-        elif self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_DEC,
-        ]:
-            self.logs_to_show_in_comment.append('DEC %s' % _dst)
-        else:
-            raise Exception('[E] Cannot generate pseudo IR : Unhandled instruction')
-
-    def generate_pseudo_ir_by_using_vr_related_instruction(
-            self,
-            dst_operands: list[TraceOperandForX64DbgTrace],
-            src_operands: list[TraceOperandForX64DbgTrace],
-    ):
-        _dst_adimeht_operands = self.resolve_operands_to_adimeht_operands(dst_operands)
-        _src_adimeht_operands = self.resolve_operands_to_adimeht_operands(src_operands)
-        _dst_should_be_converted = self.operands_contains_operand_for_pseudo_ir(_dst_adimeht_operands)
-        _src_should_be_converted = self.operands_contains_operand_for_pseudo_ir(_src_adimeht_operands)
-        if _dst_should_be_converted is False and _src_should_be_converted is False:
-            return
-        if self.logging_pseudo_ir:
-            self.generate_pseudo_ir(_dst_adimeht_operands, _src_adimeht_operands)
-        if self.logging_pseudo_ir_operands:
-            self.print_pseudo_ir_related_operands(_dst_adimeht_operands, 'dst')
-            self.print_pseudo_ir_related_operands(_src_adimeht_operands, 'src')
-
-    def run_adimeht_single_line_by_x64dbg_trace(self, x64dbg_trace):
-        self.logs_to_show_in_comment = []
-        self.context.set_context_by_x64dbg_trace(x64dbg_trace)
-
-        # todo: for debugging begin ##################################
-        if self.context.x64dbg_trace['id'] == 9933:
-            self.api.print(self.context.x64dbg_trace['id'])
-        # todo: for debugging end ##################################
-
-        _you_are_in_vm = self.check_you_are_in_vm()
-        if self.logging_you_are_in_vm:
-            if _you_are_in_vm:
-                self.logs_to_show_in_comment.append('[VM]')
-
-        _dst_operands: list[TraceOperandForX64DbgTrace] | None = None
-        _src_operands: list[TraceOperandForX64DbgTrace] | None = None
-        _dst_operands, _src_operands = self.retrieve_dst_and_src_operands(x64dbg_trace)
-
-        self.identify_the_role_of_vm_part_for_operands(_dst_operands)
-        _from_memory_formula = False  # will be set as True when it's LEA
-        if self.context.current_capstone_instruction.id in [
-            capstone.x86.X86_INS_LEA,
-        ]:
-            _from_memory_formula = True
-        self.identify_the_role_of_vm_part_for_operands(_src_operands, from_memory_formula=_from_memory_formula)
-
-        self.generate_pseudo_ir_by_using_vr_related_instruction(_dst_operands, _src_operands)
-
-        # back up logs
-        _logs_to_show_in_comment = self.logs_to_show_in_comment
-
-        # run taint
-        _new_x64dbg_trace = self.run_taint_single_line_by_x64dbg_trace(x64dbg_trace)
-        if _new_x64dbg_trace['comment'] != '':
-            _logs_to_show_in_comment.append(_new_x64dbg_trace['comment'])
-        _new_x64dbg_trace['comment'] = ' | '.join(_logs_to_show_in_comment)
-        return _new_x64dbg_trace
+        Format: [{'name': 'VB_1_0x1c @ 0x55568a', 'symbol': 'VB'}, ...]
+        """
+        result = []
+        for addr, (role, depth, offset) in sorted(self.vm_elements.items()):
+            label = f"{role}_{depth}_{hex(offset)}"
+            result.append({
+                'name': f"{label} @ {hex(addr)}",
+                'symbol': role,
+            })
+        return result
