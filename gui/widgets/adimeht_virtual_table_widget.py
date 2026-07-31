@@ -1,9 +1,9 @@
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem
 
 
-class TaintTableWidget(QTableWidget):
+class AdimehtVirtualTableWidget(QTableWidget):
     def __init__(self, parent=None):
-        super(TaintTableWidget, self).__init__(parent)
+        super(AdimehtVirtualTableWidget, self).__init__(parent)
         self.taint_data = []
 
     def set_data(self, data):
