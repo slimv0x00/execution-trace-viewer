@@ -102,6 +102,9 @@ BOOKMARK_LABELS = ["start row", "end row", "addr", "disasm", "comment"]
 REG_LABELS = ["reg", "hex", "dec"]
 MEM_LABELS = ["access", "address", "value"]
 TAINT_LABELS = ["name", "tainted by"]
+TAINT_ESP_LABELS = ["name", "symbol"]
+ADIMEHT_LABELS = ["name", "tainted by"]
+ADIMEHT_VIRTUAL_LABELS = ["element", "relayed from"]
 
 TRACE_ROW_HEIGHT = 20
 

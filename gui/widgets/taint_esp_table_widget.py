@@ -1,9 +1,9 @@
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem
 
 
-class TaintTableWidget(QTableWidget):
+class TaintEspTableWidget(QTableWidget):
     def __init__(self, parent=None):
-        super(TaintTableWidget, self).__init__(parent)
+        super(TaintEspTableWidget, self).__init__(parent)
         self.taint_data = []
 
     def set_data(self, data):
@@ -17,9 +17,9 @@ class TaintTableWidget(QTableWidget):
             self.setRowCount(0)
         else:
             self.setRowCount(len(self.taint_data))
-            for i, taint_dict in enumerate(self.taint_data):# 딕셔너리 키 접근 ('name', 'symbol')
-                name = taint_dict.get('name', 'Unknown')
-                symbol = taint_dict.get('symbol', '')
+            for i, taint_dict in enumerate(self.taint_data):
+                name = taint_dict.get("name", "Unknown")
+                symbol = taint_dict.get("symbol", "")
 
                 self.setItem(i, 0, QTableWidgetItem(name))
                 self.setItem(i, 1, QTableWidgetItem(symbol))
